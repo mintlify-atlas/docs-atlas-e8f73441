@@ -1,0 +1,148 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "STGNN",
+  "projectDescription": "Spatiotemporal Graph Neural Network for predicting Alzheimer's disease progression using rs-fMRI brain connectivity data",
+  "theme": "aspen",
+  "primaryColor": "#4A90E2",
+  "lightColor": "#7AB8F5",
+  "darkColor": "#2E5C8A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/architecture",
+              "concepts/spatiotemporal-modeling",
+              "concepts/graph-neural-networks",
+              "concepts/temporal-prediction"
+            ]
+          },
+          {
+            "group": "Data & Setup",
+            "pages": [
+              "data/data-requirements",
+              "data/data-preparation",
+              "data/adni-dataset",
+              "data/tadpole-format"
+            ]
+          },
+          {
+            "group": "Training Guide",
+            "pages": [
+              "training/training-overview",
+              "training/configuration",
+              "training/model-architectures",
+              "training/cross-validation",
+              "training/class-imbalance"
+            ]
+          },
+          {
+            "group": "Model Components",
+            "pages": [
+              "models/gnn-encoder",
+              "models/temporal-predictor",
+              "models/pooling-strategies",
+              "models/loss-functions"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/time-aware-prediction",
+              "advanced/pretraining",
+              "advanced/dynamic-connectivity",
+              "advanced/hyperparameter-tuning"
+            ]
+          },
+          {
+            "group": "Results & Evaluation",
+            "pages": [
+              "evaluation/metrics",
+              "evaluation/conversion-analysis",
+              "evaluation/performance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Datasets",
+            "pages": [
+              "api/fc-adni-dataset",
+              "api/dfc-adni-dataset",
+              "api/temporal-dataloader"
+            ]
+          },
+          {
+            "group": "Models",
+            "pages": [
+              "api/graph-neural-network",
+              "api/dynamic-graph-neural-network",
+              "api/temporal-predictor",
+              "api/gru-predictor",
+              "api/rnn-predictor"
+            ]
+          },
+          {
+            "group": "Loss & Training",
+            "pages": [
+              "api/focal-loss",
+              "api/graph-converter"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/temporal-gap-processor",
+              "api/conversion-analyzer",
+              "api/utils"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Spatiotemporal modeling combining Graph Neural Networks with RNN/LSTM/GRU for temporal sequences",
+    "Support for multiple GNN architectures (GraphSAGE, GCN, GAT) with configurable layers",
+    "TopK pooling for hierarchical graph representations",
+    "Focal loss implementation for handling class imbalance in conversion prediction",
+    "Time-aware prediction with temporal gap features",
+    "Self-supervised pretraining for graph encoders",
+    "5-fold cross-validation with stratified splits",
+    "Support for both static (FC) and dynamic functional connectivity (DFC)",
+    "Comprehensive evaluation with conversion-specific accuracy analysis"
+  ],
+  "publicApiSurface": [
+    "FC_ADNIDataset - PyTorch Geometric dataset for functional connectivity graphs",
+    "DFC_ADNIDataset - Dataset for dynamic functional connectivity",
+    "GraphNeuralNetwork - Configurable GNN encoder with multiple layer types",
+    "DynamicGraphNeuralNetwork - GNN for dynamic connectivity matrices",
+    "TemporalTabGNNClassifier - LSTM-based temporal classifier",
+    "GRUPredictor - GRU-based temporal model",
+    "RNNPredictor - Basic RNN temporal model",
+    "TemporalDataLoader - Custom DataLoader for variable-length temporal sequences",
+    "FocalLoss - Focal loss for class imbalance",
+    "GraphConverter - Utilities for graph construction",
+    "temporal_gap_processor - Temporal feature normalization utilities",
+    "conversion_analyzer - Conversion-specific accuracy analysis tools",
+    "main.py - Training script with 5-fold cross-validation",
+    "dfc_main.py - Training script for dynamic connectivity",
+    "supervised_pretrain.py - Self-supervised encoder pretraining",
+    "setup_temporal_data.py - Data preparation utilities"
+  ]
+}
