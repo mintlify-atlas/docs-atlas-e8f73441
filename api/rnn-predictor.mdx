@@ -1,0 +1,222 @@
+---
+title: RNNPredictor
+description: Vanilla RNN-based temporal predictor for sequence classification
+---
+
+## Overview
+
+`RNNPredictor` is a vanilla RNN-based model for temporal sequence processing. It provides the simplest recurrent architecture for baseline comparisons.
+
+## Class Signature
+
+```python
+class RNNPredictor(nn.Module):
+    def __init__(
+        self,
+        graph_emb_dim: int = 256,
+        tab_emb_dim: int = 64,
+        hidden_dim: int = 128,
+        num_layers: int = 1,
+        dropout: float = 0.3,
+        bidirectional: bool = False,
+        num_classes: int = 2
+    )
+```
+
+## Parameters
+
+<ParamField path="graph_emb_dim" type="int" default="256">
+  Dimension of graph embeddings from GNN encoder
+</ParamField>
+
+<ParamField path="tab_emb_dim" type="int" default="64">
+  Dimension of tabular embeddings. Set to `0` for graph-only models
+</ParamField>
+
+<ParamField path="hidden_dim" type="int" default="128">
+  RNN hidden state dimension
+</ParamField>
+
+<ParamField path="num_layers" type="int" default="1">
+  Number of stacked RNN layers
+</ParamField>
+
+<ParamField path="dropout" type="float" default="0.3">
+  Dropout probability (only applied if `num_layers > 1`)
+</ParamField>
+
+<ParamField path="bidirectional" type="bool" default="False">
+  Whether to use bidirectional RNN
+</ParamField>
+
+<ParamField path="num_classes" type="int" default="2">
+  Number of output classes
+</ParamField>
+
+## Forward Method
+
+```python
+def forward(
+    self,
+    graph_seq: torch.Tensor,
+    tab_seq: Optional[torch.Tensor] = None,
+    lengths: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None
+) -> torch.Tensor
+```
+
+### Parameters
+
+<ParamField path="graph_seq" type="torch.Tensor">
+  Graph embedding sequence of shape `[batch_size, max_seq_len, graph_emb_dim]`
+</ParamField>
+
+<ParamField path="tab_seq" type="torch.Tensor" default="None">
+  Optional tabular embedding sequence of shape `[batch_size, max_seq_len, tab_emb_dim]`
+</ParamField>
+
+<ParamField path="lengths" type="torch.Tensor" default="None">
+  True sequence lengths, shape `[batch_size]`. Used for packed sequences
+</ParamField>
+
+<ParamField path="mask" type="torch.Tensor" default="None">
+  Attention mask of shape `[batch_size, max_seq_len]`
+</ParamField>
+
+### Returns
+
+<ResponseField name="logits" type="torch.Tensor">
+  Classification logits of shape `[batch_size, num_classes]`
+</ResponseField>
+
+## Architecture Details
+
+### RNN Configuration
+
+```python
+self.rnn = nn.RNN(
+    input_size=self.input_dim,
+    hidden_size=hidden_dim,
+    num_layers=num_layers,
+    batch_first=True,
+    dropout=dropout if num_layers > 1 else 0,
+    bidirectional=bidirectional,
+    nonlinearity='tanh'  # or 'relu'
+)
+```
+
+### Input Fusion
+
+```python
+if tab_seq is None or self.tab_emb_dim == 0:
+    fused = graph_seq
+else:
+    fused = torch.cat([graph_seq, tab_seq], dim=-1)
+```
+
+### RNN Processing
+
+With packed sequences:
+```python
+fused_packed = nn.utils.rnn.pack_padded_sequence(
+    fused, lengths.cpu(), batch_first=True, enforce_sorted=False
+)
+output_packed, h_n = self.rnn(fused_packed)
+```
+
+Standard:
+```python
+output, h_n = self.rnn(fused)
+```
+
+### Hidden State Extraction
+
+Bidirectional:
+```python
+final_hidden = torch.cat([h_n[-2], h_n[-1]], dim=1)
+```
+
+Unidirectional:
+```python
+final_hidden = h_n[-1]
+```
+
+### Classification Head
+
+```python
+nn.Sequential(
+    nn.Linear(rnn_output_dim, 64),
+    nn.ReLU(),
+    nn.Dropout(dropout),
+    nn.Linear(64, num_classes)
+)
+```
+
+## Example Usage
+
+From main.py:277:
+
+```python
+classifier = RNNPredictor(
+    graph_emb_dim=512,
+    tab_emb_dim=0,
+    hidden_dim=opt.lstm_hidden_dim,  # 64
+    num_layers=opt.lstm_num_layers,  # 1
+    dropout=0.45,
+    bidirectional=False,
+    num_classes=2
+).to(device)
+```
+
+### Training Example
+
+```python
+for batch in train_loader:
+    graph_seq = batch['graph_seq']
+    lengths = batch['lengths']
+    labels = batch['labels']
+    
+    logits = classifier(graph_seq, None, lengths)
+    loss = criterion(logits, labels)
+    loss.backward()
+    optimizer.step()
+```
+
+## Vanilla RNN Characteristics
+
+### Advantages
+
+- Simplest recurrent architecture
+- Fewest parameters
+- Good baseline for comparison
+- Fast training
+
+### Limitations
+
+- Suffers from vanishing gradients
+- Struggles with long-term dependencies
+- Less expressive than LSTM/GRU
+- Rarely outperforms gated variants
+
+### When to Use RNN
+
+- As a baseline to validate that temporal modeling helps
+- Very short sequences (< 5 time steps)
+- When extreme computational efficiency is required
+- When other models overfit
+
+## Comparison: RNN vs GRU vs LSTM
+
+| Model | Parameters | Memory | Long-term | Speed |
+|-------|-----------|---------|-----------|-------|
+| RNN | Fewest | Low | Poor | Fastest |
+| GRU | Medium | Medium | Good | Fast |
+| LSTM | Most | High | Best | Slower |
+
+## Notes
+
+- Uses `tanh` nonlinearity by default (can be changed to `relu`)
+- No gating mechanisms (unlike GRU/LSTM)
+- RNN output dimension: `hidden_dim * (2 if bidirectional else 1)`
+- Typically trained with `bidirectional=False` in STGNN framework
+- Best suited for simple temporal patterns or as a baseline

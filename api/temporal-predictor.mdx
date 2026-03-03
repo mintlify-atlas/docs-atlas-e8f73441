@@ -1,0 +1,178 @@
+---
+title: TemporalTabGNNClassifier
+description: LSTM-based temporal predictor for classifying sequences of graph and tabular embeddings
+---
+
+## Overview
+
+`TemporalTabGNNClassifier` is an LSTM-based model that processes sequences of graph embeddings (optionally combined with tabular features) for temporal classification tasks like AD conversion prediction.
+
+## Class Signature
+
+```python
+class TemporalTabGNNClassifier(nn.Module):
+    def __init__(
+        self,
+        graph_emb_dim: int = 256,
+        tab_emb_dim: int = 64,
+        hidden_dim: int = 128,
+        num_layers: int = 1,
+        dropout: float = 0.3,
+        bidirectional: bool = False,
+        num_classes: int = 2
+    )
+```
+
+## Parameters
+
+<ParamField path="graph_emb_dim" type="int" default="256">
+  Dimension of graph embeddings from GNN encoder
+</ParamField>
+
+<ParamField path="tab_emb_dim" type="int" default="64">
+  Dimension of tabular embeddings. Set to `0` for graph-only models
+</ParamField>
+
+<ParamField path="hidden_dim" type="int" default="128">
+  LSTM hidden state dimension
+</ParamField>
+
+<ParamField path="num_layers" type="int" default="1">
+  Number of stacked LSTM layers
+</ParamField>
+
+<ParamField path="dropout" type="float" default="0.3">
+  Dropout probability for LSTM and classifier (only applied if `num_layers > 1`)
+</ParamField>
+
+<ParamField path="bidirectional" type="bool" default="False">
+  Whether to use bidirectional LSTM
+</ParamField>
+
+<ParamField path="num_classes" type="int" default="2">
+  Number of output classes (e.g., 2 for binary classification)
+</ParamField>
+
+## Forward Method
+
+```python
+def forward(
+    self,
+    graph_seq: torch.Tensor,
+    tab_seq: Optional[torch.Tensor] = None,
+    lengths: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None
+) -> torch.Tensor
+```
+
+### Parameters
+
+<ParamField path="graph_seq" type="torch.Tensor">
+  Graph embedding sequence of shape `[batch_size, max_seq_len, graph_emb_dim]`
+</ParamField>
+
+<ParamField path="tab_seq" type="torch.Tensor" default="None">
+  Optional tabular embedding sequence of shape `[batch_size, max_seq_len, tab_emb_dim]`. Can be `None` if `tab_emb_dim=0`
+</ParamField>
+
+<ParamField path="lengths" type="torch.Tensor" default="None">
+  True sequence lengths for each sample in batch, shape `[batch_size]`. Used for packed sequences
+</ParamField>
+
+<ParamField path="mask" type="torch.Tensor" default="None">
+  Attention mask of shape `[batch_size, max_seq_len]`. `True` for real data, `False` for padding
+</ParamField>
+
+### Returns
+
+<ResponseField name="logits" type="torch.Tensor">
+  Classification logits of shape `[batch_size, num_classes]`
+</ResponseField>
+
+## Architecture Details
+
+### Input Fusion
+
+If tabular features provided:
+```python
+fused = torch.cat([graph_seq, tab_seq], dim=-1)  # [B, T, graph_emb_dim + tab_emb_dim]
+```
+
+Graph-only mode:
+```python
+fused = graph_seq  # [B, T, graph_emb_dim]
+```
+
+### LSTM Processing
+
+With `lengths` provided (packed sequences):
+```python
+fused_packed = nn.utils.rnn.pack_padded_sequence(fused, lengths.cpu(), batch_first=True, enforce_sorted=False)
+output_packed, (h_n, c_n) = self.lstm(fused_packed)
+```
+
+Standard processing:
+```python
+output, (h_n, c_n) = self.lstm(fused)
+```
+
+### Hidden State Extraction
+
+Bidirectional:
+```python
+final_hidden = torch.cat([h_n[-2], h_n[-1]], dim=1)  # [B, 2*hidden_dim]
+```
+
+Unidirectional:
+```python
+final_hidden = h_n[-1]  # [B, hidden_dim]
+```
+
+### Classification Head
+
+```python
+nn.Sequential(
+    nn.Linear(lstm_output_dim, 64),
+    nn.ReLU(),
+    nn.Dropout(dropout),
+    nn.Linear(64, num_classes)
+)
+```
+
+## Example Usage
+
+From main.py:257:
+
+```python
+classifier = TemporalTabGNNClassifier(
+    graph_emb_dim=512,  # GNN output is 256*2 from pooling
+    tab_emb_dim=0,      # Graph-only mode
+    hidden_dim=opt.lstm_hidden_dim,  # 64
+    num_layers=opt.lstm_num_layers,  # 1
+    dropout=0.45,
+    bidirectional=opt.lstm_bidirectional,  # True
+    num_classes=2
+).to(device)
+```
+
+### Training Example
+
+```python
+for batch in train_loader:
+    graph_seq = batch['graph_seq']  # [B, T, 512]
+    lengths = batch['lengths']       # [B]
+    labels = batch['labels']         # [B]
+    
+    logits = classifier(graph_seq, None, lengths)
+    loss = criterion(logits, labels)
+    loss.backward()
+    optimizer.step()
+```
+
+## Notes
+
+- Input dimension is `graph_emb_dim + tab_emb_dim`
+- LSTM output dimension is `hidden_dim * (2 if bidirectional else 1)`
+- Packed sequences improve efficiency for variable-length inputs
+- Set `tab_emb_dim=0` for graph-only models
+- Dropout only applied between LSTM layers when `num_layers > 1`

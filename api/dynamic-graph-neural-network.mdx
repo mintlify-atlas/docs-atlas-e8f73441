@@ -1,0 +1,189 @@
+---
+title: DynamicGraphNeuralNetwork
+description: Graph neural network with temporal aggregation for processing sequences of dynamic brain graphs
+---
+
+## Overview
+
+`DynamicGraphNeuralNetwork` extends static GNN architectures to handle temporal sequences of graphs. It includes built-in temporal aggregation methods (mean, max, GRU) and end-to-end classification.
+
+## Class Signature
+
+```python
+class DynamicGraphNeuralNetwork(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim=128,
+        output_dim=256,
+        num_classes=3,
+        dropout=0.5,
+        use_topk_pooling=True,
+        topk_ratio=0.5,
+        layer_type="GCN",
+        temporal_aggregation="mean",
+        num_layers=3,
+        activation='relu'
+    )
+```
+
+## Parameters
+
+<ParamField path="input_dim" type="int" required>
+  Raw node feature dimensionality (e.g., number of brain regions)
+</ParamField>
+
+<ParamField path="hidden_dim" type="int" default="128">
+  Hidden dimension for GNN layers after input projection
+</ParamField>
+
+<ParamField path="output_dim" type="int" default="256">
+  Output dimension of final GNN layer (before pooling)
+</ParamField>
+
+<ParamField path="num_classes" type="int" default="3">
+  Number of classification classes
+</ParamField>
+
+<ParamField path="dropout" type="float" default="0.5">
+  Dropout probability
+</ParamField>
+
+<ParamField path="use_topk_pooling" type="bool" default="True">
+  Whether to use TopK pooling layers
+</ParamField>
+
+<ParamField path="topk_ratio" type="float" default="0.5">
+  Ratio of nodes to retain in TopK pooling
+</ParamField>
+
+<ParamField path="layer_type" type="str" default="GCN">
+  GNN layer type: `"GCN"`, `"GAT"`, or `"GraphSAGE"`
+</ParamField>
+
+<ParamField path="temporal_aggregation" type="str" default="mean">
+  Temporal aggregation method: `"mean"`, `"max"`, or `"gru"`
+</ParamField>
+
+<ParamField path="num_layers" type="int" default="3">
+  Number of GNN layers
+</ParamField>
+
+<ParamField path="activation" type="str" default="relu">
+  Activation function: `"relu"`, `"leaky_relu"`, `"elu"`, or `"gelu"`
+</ParamField>
+
+## Forward Method (Single Graph)
+
+```python
+def forward(self, x, edge_index, batch, time_features=None)
+```
+
+Process a single graph and return embeddings. Compatible with `TemporalDataLoader`.
+
+### Parameters
+
+<ParamField path="x" type="torch.Tensor">
+  Node features of shape `[num_nodes, input_dim]`
+</ParamField>
+
+<ParamField path="edge_index" type="torch.Tensor">
+  Edge indices of shape `[2, num_edges]`
+</ParamField>
+
+<ParamField path="batch" type="torch.Tensor">
+  Batch assignment for nodes
+</ParamField>
+
+<ParamField path="time_features" type="torch.Tensor" default="None">
+  Optional time features (not used in this encoder)
+</ParamField>
+
+### Returns
+
+<ResponseField name="embeddings" type="torch.Tensor">
+  Graph embeddings of shape `[batch_size, 2 * output_dim]`
+</ResponseField>
+
+## Forward Sequence Method
+
+```python
+def forward_sequence(self, x_seq, edge_index_seq, batch_seq)
+```
+
+Process a sequence of graphs for classification.
+
+### Parameters
+
+<ParamField path="x_seq" type="list[torch.Tensor]">
+  List of node feature tensors, each of shape `[num_nodes_t, input_dim]`
+</ParamField>
+
+<ParamField path="edge_index_seq" type="list[torch.Tensor]">
+  List of edge index tensors per time step
+</ParamField>
+
+<ParamField path="batch_seq" type="list[torch.Tensor]">
+  List of batch tensors per time step
+</ParamField>
+
+### Returns
+
+<ResponseField name="logits" type="torch.Tensor">
+  Classification logits of shape `[batch_size, num_classes]`
+</ResponseField>
+
+## Architecture Details
+
+### Spatial Processing
+
+1. Input projection: `input_dim → hidden_dim`
+2. GNN layers with GraphNorm
+3. Optional TopK pooling after each layer
+4. Global mean + max pooling → `2 * output_dim`
+
+### Temporal Aggregation
+
+**Mean aggregation**: Average embeddings across time steps
+
+```python
+out = time_outputs.mean(dim=1)
+```
+
+**Max aggregation**: Max-pool embeddings across time steps
+
+```python
+out, _ = time_outputs.max(dim=1)
+```
+
+**GRU aggregation**: Process sequence through GRU
+
+```python
+_, h = self.gru(time_outputs)
+out = h.squeeze(0)
+```
+
+### Classification
+
+Final linear layer: `temporal_dim → num_classes`
+
+## Methods
+
+### load_state_dict_flexible
+
+```python
+def load_state_dict_flexible(self, state_dict)
+```
+
+Load state dict with flexibility for missing or extra keys.
+
+<ParamField path="state_dict" type="dict">
+  State dictionary to load
+</ParamField>
+
+## Notes
+
+- The `forward()` method processes single graphs, while `forward_sequence()` handles temporal sequences
+- TopK pooling ratio clamped to minimum 30% for stability
+- When using GRU aggregation, hidden size equals `2 * output_dim`
+- Compatible with both single-graph and multi-graph temporal workflows

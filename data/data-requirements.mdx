@@ -1,0 +1,260 @@
+---
+title: 'Data Requirements'
+description: 'Required data format and structure for STGNN training'
+---
+
+## Overview
+
+The STGNN model requires two main data components:
+
+1. **Functional Connectivity (FC) Matrices** - Brain connectivity graphs from rs-fMRI scans
+2. **Temporal Label File** - Subject labels and visit information with temporal metadata
+
+## Directory Structure
+
+```
+data/
+├── FC_Matrices/              # Functional connectivity matrices
+│   ├── sub-XXXXXX_run-01_fc_matrix.npz
+│   ├── sub-XXXXXX_run-02_fc_matrix.npz
+│   └── ...
+├── TADPOLE_TEMPORAL.csv      # Temporal labels and visit data
+├── TADPOLE_COMPLETE.csv      # (Optional) Source data for temporal setup
+└── TADPOLE_Simplified.csv    # (Optional) Source data for temporal setup
+```
+
+## FC Matrix Requirements
+
+### File Format
+
+- **Location**: `data/FC_Matrices/`
+- **Naming Convention**: `sub-{SUBJECT_ID}_run-{RUN_NUMBER}_fc_matrix.npz`
+- **File Type**: NumPy compressed array (`.npz`)
+
+### Filename Pattern
+
+The dataset loader expects files matching this pattern:
+```
+sub-XXXXXX_run-XX_fc_matrix.npz
+```
+
+Where:
+- `XXXXXX` is the subject ID (6 digits, no underscores)
+- `XX` is the run number (2 digits, zero-padded)
+
+### NPZ File Contents
+
+Each `.npz` file must contain:
+
+<CodeGroup>
+```python Example Structure
+import numpy as np
+
+# Create FC matrix
+fc_matrix = np.random.randn(116, 116)  # Example: 116 ROIs
+
+# Save with correct key
+np.savez('sub-123456_run-01_fc_matrix.npz', arr_0=fc_matrix)
+```
+
+```python Loading Example
+# How the dataset loads matrices
+data = np.load('sub-123456_run-01_fc_matrix.npz')
+fc_matrix = data['arr_0']  # Default variable name
+```
+</CodeGroup>
+
+**Key Requirements**:
+- Default array key: `arr_0` (configurable via `var_name` parameter)
+- Matrix must be square (N × N where N = number of ROIs)
+- Values represent correlation coefficients between brain regions
+- Matrix is automatically symmetrized: `(matrix + matrix.T) / 2`
+
+### Matrix Properties
+
+From `FC_ADNIDataset.py:106`:
+```python
+fc_matrix = data[self.var_name]
+fc_matrix = (fc_matrix + fc_matrix.T) / 2  # Ensure symmetry
+```
+
+- **Dimensions**: Typically 116×116 (AAL atlas) or other ROI parcellation
+- **Values**: Correlation coefficients (typically -1 to 1)
+- **Symmetry**: Enforced automatically during loading
+- **Thresholding**: Edges with |value| < threshold are removed (default: 0.2)
+
+## Label File Requirements
+
+### File Format
+
+- **Filename**: `TADPOLE_TEMPORAL.csv`
+- **Location**: `data/`
+- **Format**: CSV with header row
+
+### Required Columns
+
+From `FC_ADNIDataset.py:123-158`, the following columns are required:
+
+| Column | Type | Description | Example |
+|--------|------|-------------|----------|
+| `Subject` | string | Subject ID (no underscores) | `123456` |
+| `Visit` | string | Visit code | `bl`, `m06`, `m12` |
+| `Label_CS_Num` | int | Cognitive stage label | `0` (stable) or `1` (converter) |
+| `Visit_Order` | int | Chronological visit number | `1`, `2`, `3`, ... |
+| `Months_From_Baseline` | float | Time from first visit | `0.0`, `6.2`, `12.5` |
+| `Months_To_Next_Original` | float | Time to next visit | `6.2`, `6.3`, `-1` |
+
+### Optional Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `Acq_Date` | string | Acquisition date |
+| `Age` | float | Subject age at visit |
+| `Sex` | string | Subject sex |
+| `Group` | string | Diagnostic group |
+| `Total_Visits` | int | Total visits for subject |
+
+### Subject ID Formatting
+
+<Warning>
+Subject IDs in `TADPOLE_TEMPORAL.csv` must **not** contain underscores. The dataset automatically strips underscores:
+
+```python
+df['Subject'] = df['Subject'].str.replace('_', '', regex=False)
+```
+
+Example:
+- In CSV: `123456` (no underscore)
+- In FC filename: `sub-123456_run-01_fc_matrix.npz`
+</Warning>
+
+## Data Mapping
+
+### Subject to Graph Mapping
+
+The dataset maps FC matrices to labels using:
+
+1. **Extract subject ID** from filename: `sub-123456_run-01_fc_matrix.npz` → subject `123456`, run `01`
+2. **Create full ID**: `123456_run01` (underscores in full ID, zero-padded run)
+3. **Match to CSV**: Use subject `123456` for label lookup
+4. **Assign visit info**: Map run number to chronological visit order
+
+From `FC_ADNIDataset.py:144-152`:
+```python
+for run_idx, (_, visit_row) in enumerate(subject_data.iterrows()):
+    run_key = f"{subject}_run{run_idx + 1:02d}"  # Format as run01, run02, etc.
+    
+    visit_dict[run_key] = {
+        'visit_code': visit_row['Visit'],
+        'visit_months': visit_row['Months_From_Baseline'],
+        'months_to_next': visit_row.get('Months_To_Next_Original', -1)
+    }
+```
+
+### Chronological Visit Ordering
+
+Run numbers correspond to chronologically ordered visits:
+- `run-01` → First visit (earliest `Visit_Order`)
+- `run-02` → Second visit
+- `run-03` → Third visit, etc.
+
+<Info>
+The dataset sorts visits by `Visit_Order` to ensure proper chronological mapping between FC matrices and temporal information.
+</Info>
+
+## Label Encoding
+
+### Classification Labels
+
+- **0**: Stable (no cognitive decline)
+- **1**: Converter (progressed to worse cognitive stage)
+
+### Label Assignment
+
+From `FC_ADNIDataset.py:130-135`:
+```python
+# Use the label from the last visit per subject
+for subject in df['Subject'].unique():
+    subject_data = df[df['Subject'] == subject]
+    # Use the last visit's label as the overall subject label
+    label_dict[subject] = subject_data.iloc[-1][label_col]
+```
+
+<Note>
+The subject's overall label is taken from their **last chronological visit**. This represents the final observed cognitive stage.
+</Note>
+
+## Graph Construction
+
+### Edge Thresholding
+
+From `FC_ADNIDataset.py:69`:
+```python
+A[np.abs(A) < self.threshold] = 0  # Default threshold = 0.2
+```
+
+Connections with |correlation| < threshold are removed to create sparse graphs.
+
+### Node Features
+
+From `FC_ADNIDataset.py:74-78`:
+```python
+if node_features is None:
+    # Use normalized identity matrix
+    x = torch.eye(N, dtype=torch.float) * 1.0
+else:
+    x = torch.tensor(node_features, dtype=torch.float)
+```
+
+By default, nodes use identity matrix features (one-hot encoding of ROI position).
+
+## Validation
+
+<Steps>
+  <Step title="Check file naming">
+    Ensure all FC matrices follow `sub-XXXXXX_run-XX_fc_matrix.npz` pattern
+  </Step>
+  
+  <Step title="Verify NPZ contents">
+    Confirm each `.npz` file contains `arr_0` key with square matrix
+  </Step>
+  
+  <Step title="Validate CSV columns">
+    Check `TADPOLE_TEMPORAL.csv` has all required columns listed above
+  </Step>
+  
+  <Step title="Match subjects">
+    Verify subject IDs in CSV match those in FC matrix filenames (without `sub-` prefix)
+  </Step>
+  
+  <Step title="Check visit counts">
+    Ensure number of FC files per subject matches their `Total_Visits` in CSV
+  </Step>
+</Steps>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Missing 'arr_0' key in NPZ file">
+    **Error**: `'arr_0' missing in {filepath}, skipping.`
+    
+    **Solution**: Save matrices with correct key:
+    ```python
+    np.savez(filename, arr_0=fc_matrix)  # Not just np.savez(filename, fc_matrix)
+    ```
+  </Accordion>
+  
+  <Accordion title="Subject ID mismatch">
+    **Error**: No label found for subject
+    
+    **Solution**: Remove underscores from subject IDs in CSV:
+    - Wrong: `123_456`
+    - Correct: `123456`
+  </Accordion>
+  
+  <Accordion title="Run number mismatch">
+    **Error**: Visit information not found
+    
+    **Solution**: Ensure run numbers start at 01 and match chronological visit order in CSV
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,240 @@
+---
+title: DFC_ADNIDataset
+description: Dataset class for loading dynamic functional connectivity (DFC) brain graphs from ADNI data
+---
+
+## Overview
+
+`DFC_ADNIDataset` is a PyTorch Geometric dataset class for loading and processing dynamic functional connectivity matrices from ADNI brain imaging data. It extends `InMemoryDataset` and converts time-varying DFC matrices into sequences of graph structures.
+
+## Class Definition
+
+```python
+class DFC_ADNIDataset(InMemoryDataset)
+```
+
+## Constructor
+
+```python
+DFC_ADNIDataset(
+    root,
+    threshold=0.2,
+    label_csv='TADPOLE_Simplified.csv',
+    var_name='dynamic_fc',
+    transform=None,
+    pre_transform=None
+)
+```
+
+### Parameters
+
+<ParamField path="root" type="str" required>
+  Root directory containing the dataset files. Expected structure:
+  - `DFC_Matrices/` subdirectory with dynamic FC `.npz` files
+  - Label CSV file (default: `TADPOLE_Simplified.csv`)
+</ParamField>
+
+<ParamField path="threshold" type="float" default="0.2">
+  Threshold for edge filtering. Edges with absolute correlation values below this threshold are removed from the graph.
+</ParamField>
+
+<ParamField path="label_csv" type="str" default="'TADPOLE_Simplified.csv'">
+  Filename of the CSV containing subject labels. Must be located in the root directory.
+</ParamField>
+
+<ParamField path="var_name" type="str" default="'dynamic_fc'">
+  Name of the variable in the `.npz` files containing the dynamic FC matrix data.
+</ParamField>
+
+<ParamField path="transform" type="callable" default="None">
+  Optional transform to apply to data objects on-the-fly.
+</ParamField>
+
+<ParamField path="pre_transform" type="callable" default="None">
+  Optional transform to apply during data processing.
+</ParamField>
+
+## Attributes
+
+<ResponseField name="data" type="torch_geometric.data.Data">
+  Collated data object containing all graphs.
+</ResponseField>
+
+<ResponseField name="slices" type="dict">
+  Dictionary mapping attributes to their slice indices for efficient indexing.
+</ResponseField>
+
+<ResponseField name="subj_id_list" type="list or None">
+  List of subject IDs corresponding to each graph in the dataset. Preserved across save/load operations.
+</ResponseField>
+
+<ResponseField name="threshold" type="float">
+  The correlation threshold used for edge filtering.
+</ResponseField>
+
+## Methods
+
+### fc_to_graph
+
+Converts a single functional connectivity matrix (one time point) into a PyTorch Geometric graph object.
+
+```python
+fc_to_graph(
+    matrix,
+    node_features=None
+) -> Data
+```
+
+**Parameters:**
+- `matrix` (numpy.ndarray): FC matrix of shape (N, N) for a single time point
+- `node_features` (numpy.ndarray, optional): Node feature matrix. If None, uses identity matrix
+
+**Returns:**
+- `Data`: PyTorch Geometric Data object with `x`, `edge_index`, and `edge_attr`
+
+**Implementation Details:**
+- Uses upper triangle without self-loops to avoid duplicate edges
+- Creates undirected graph by adding both (i, j) and (j, i) edges
+- Edge attributes represent correlation strengths
+
+### get
+
+Overrides the default `get` method to attach subject IDs to data objects.
+
+```python
+get(idx) -> Data
+```
+
+**Parameters:**
+- `idx` (int): Index of the graph to retrieve
+
+**Returns:**
+- `Data`: Graph data object with `subj_id` attribute attached
+
+### load_subject_labels
+
+Loads subject labels from CSV file.
+
+```python
+load_subject_labels(
+    label_csv_path,
+    label_col='Label_CS_Num'
+) -> dict
+```
+
+**Parameters:**
+- `label_csv_path` (str): Path to CSV file with subject labels
+- `label_col` (str): Column name containing the label values
+
+**Returns:**
+- `dict`: Dictionary mapping subject IDs to their labels
+
+## Data Format
+
+Each graph in the dataset represents one time window from a dynamic FC analysis and has the following attributes:
+
+- `x`: Node feature matrix (default: identity matrix)
+- `edge_index`: Graph connectivity in COO format (undirected)
+- `edge_attr`: Edge weights (correlation values)
+- `y`: Subject label (diagnosis category)
+- `time_index`: Time window index within the scan
+- `subj_id`: Subject identifier (format: `sub-{SUBJECT_ID}_run-{RUN_NUM}`)
+
+## Usage Example
+
+```python
+import torch
+from DFC_ADNIDataset import DFC_ADNIDataset
+from torch_geometric.loader import DataLoader
+
+# Initialize dataset
+dataset = DFC_ADNIDataset(
+    root='data/adni',
+    threshold=0.25,
+    label_csv='TADPOLE_Simplified.csv',
+    var_name='dynamic_fc'
+)
+
+print(f"Total number of graphs (all time points): {len(dataset)}")
+print(f"Number of features: {dataset.num_features}")
+print(f"Number of classes: {dataset.num_classes}")
+
+# Access a single time-point graph
+graph = dataset[0]
+print(f"Subject ID: {graph.subj_id}")
+print(f"Time index: {graph.time_index.item()}")
+print(f"Label: {graph.y.item()}")
+print(f"Nodes: {graph.num_nodes}, Edges: {graph.num_edges}")
+
+# Group graphs by subject
+from collections import defaultdict
+
+subject_graphs = defaultdict(list)
+for i in range(len(dataset)):
+    graph = dataset[i]
+    subject_graphs[graph.subj_id].append(i)
+
+print(f"\nNumber of unique subjects: {len(subject_graphs)}")
+
+# Example: Get all time points for a specific subject
+for subj_id, indices in list(subject_graphs.items())[:1]:
+    print(f"\nSubject {subj_id} has {len(indices)} time points")
+    for idx in indices:
+        g = dataset[idx]
+        print(f"  Time {g.time_index.item()}: {g.num_edges} edges")
+
+# Create a DataLoader
+loader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+for batch in loader:
+    # Process batch of time-point graphs
+    print(f"\nBatch contains:")
+    print(f"  {batch.num_graphs} graphs")
+    print(f"  {batch.num_nodes} total nodes")
+    print(f"  {batch.num_edges} total edges")
+    break
+```
+
+## File Format Requirements
+
+### Dynamic FC Matrix Files
+
+Expected filename format: `sub-{SUBJECT_ID}_run-{RUN_NUM}_dynamic_fc_matrix.npz`
+
+Example: `sub-002S0413_run-01_dynamic_fc_matrix.npz`
+
+Each `.npz` file should contain:
+- A numpy array with key matching `var_name` parameter (default: `'dynamic_fc'`)
+- Array shape: (T, N, N) where:
+  - T = number of time windows
+  - N = number of brain regions
+- Values represent correlation coefficients between regions at each time window
+
+### Label CSV Format
+
+Required columns:
+- `Subject`: Subject identifier (underscores removed for matching)
+- `Label_CS_Num`: Numeric label (diagnosis category)
+
+Example:
+```csv
+Subject,Label_CS_Num
+002S0413,0
+002S0559,1
+003S1059,2
+```
+
+## Notes
+
+- Each time window from a DFC matrix becomes a separate graph in the dataset
+- If a subject has T time windows, they contribute T graphs to the dataset
+- DFC matrices are automatically symmetrized at each time point: `(matrix + matrix.T) / 2`
+- Edges below the threshold are filtered out to create sparse graphs
+- The dataset uses upper triangle indexing to avoid duplicate edges in undirected graphs
+- Subject IDs are preserved in `subj_id_list` for efficient subject-based indexing
+- When no label is found for a subject, it defaults to 0
+- Processed data is saved to `data_dfc.pt` in the `processed/` directory
+
+## Backward Compatibility
+
+The class supports loading datasets created before the `subj_id_list` feature was added. If loaded data doesn't include the subject ID list, `subj_id_list` will be set to `None`.

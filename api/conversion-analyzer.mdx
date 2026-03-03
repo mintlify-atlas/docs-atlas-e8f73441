@@ -1,0 +1,384 @@
+---
+title: Conversion Analyzer
+description: Tools for analyzing model predictions by disease conversion trajectory
+---
+
+## Overview
+
+The `conversion_analyzer` module provides specialized analysis tools for evaluating model performance across different disease conversion trajectories. It categorizes subjects by baseline diagnostic group and conversion status (e.g., CN-Stable, CN→MCI, MCI→AD) to provide detailed performance breakdowns.
+
+This is critical for understanding how well the model performs on different types of progression patterns.
+
+## Functions
+
+### get_subject_conversion_type
+
+```python
+def get_subject_conversion_type(
+    subject_id: str,
+    label_df: pd.DataFrame
+) -> str
+```
+
+Determines the conversion trajectory for a subject based on baseline group and conversion status.
+
+<ParamField path="subject_id" type="str">
+  Subject identifier.
+</ParamField>
+
+<ParamField path="label_df" type="pd.DataFrame">
+  DataFrame containing subject diagnostic information with columns:
+  - `Subject`: Subject ID
+  - `Group`: Baseline diagnostic group (CN, MCI, AD)
+  - `Label_CS_Num`: Conversion label (0=stable, 1=converter)
+</ParamField>
+
+<ResponseField name="conversion_type" type="str">
+  One of: `'CN-Stable'`, `'CN->MCI'`, `'MCI-Stable'`, `'MCI->AD'`, `'AD-Stable'`, or `'Unknown'`.
+</ResponseField>
+
+### analyze_conversion_predictions
+
+```python
+def analyze_conversion_predictions(
+    test_subjects: List[str],
+    predictions: List[int],
+    targets: List[int],
+    label_csv_path: str
+) -> Dict[str, Dict]
+```
+
+Analyzes model predictions broken down by conversion trajectory type.
+
+<ParamField path="test_subjects" type="List[str]">
+  List of subject IDs in the test set.
+</ParamField>
+
+<ParamField path="predictions" type="List[int]">
+  Model predictions (0=stable, 1=converter) for each subject.
+</ParamField>
+
+<ParamField path="targets" type="List[int]">
+  Ground truth labels (0=stable, 1=converter) for each subject.
+</ParamField>
+
+<ParamField path="label_csv_path" type="str">
+  Path to CSV file containing subject diagnostic and conversion information.
+</ParamField>
+
+<ResponseField name="results" type="Dict[str, Dict]">
+  Dictionary mapping conversion types to performance metrics:
+  - `overall_accuracy`: Overall accuracy for this trajectory
+  - `total_subjects`: Number of subjects in this category
+  - `correct_predictions`: Number of correct predictions
+  - `stable_correct`: Correct stable predictions
+  - `stable_total`: Total stable subjects
+  - `stable_accuracy`: Accuracy on stable subjects
+  - `converter_correct`: Correct converter predictions
+  - `converter_total`: Total converter subjects
+  - `converter_accuracy`: Accuracy on converters
+  - `predictions`: List of all predictions
+  - `targets`: List of all targets
+</ResponseField>
+
+### print_conversion_accuracy_report
+
+```python
+def print_conversion_accuracy_report(
+    conversion_results: Dict[str, Dict]
+) -> None
+```
+
+Prints a formatted report of conversion-specific accuracy results.
+
+<ParamField path="conversion_results" type="Dict[str, Dict]">
+  Results dictionary from `analyze_conversion_predictions`.
+</ParamField>
+
+### aggregate_conversion_results
+
+```python
+def aggregate_conversion_results(
+    fold_conversion_results: List[Dict[str, Dict]]
+) -> Dict[str, Dict]
+```
+
+Aggregates conversion-specific results across multiple cross-validation folds.
+
+<ParamField path="fold_conversion_results" type="List[Dict[str, Dict]]">
+  List of conversion results from each fold.
+</ParamField>
+
+<ResponseField name="aggregated_results" type="Dict[str, Dict]">
+  Aggregated metrics across all folds with the same structure as individual fold results.
+</ResponseField>
+
+## Usage Examples
+
+### Basic Analysis After Testing
+
+```python
+from conversion_analyzer import (
+    analyze_conversion_predictions,
+    print_conversion_accuracy_report
+)
+
+# After model evaluation
+test_results = evaluate_detailed(test_loader, return_probs=True)
+
+# Analyze by conversion type
+label_csv_path = "data/TADPOLE_Simplified.csv"
+conversion_results = analyze_conversion_predictions(
+    test_subjects=test_subjects,
+    predictions=test_results['predictions'],
+    targets=test_results['targets'],
+    label_csv_path=label_csv_path
+)
+
+# Print detailed report
+print_conversion_accuracy_report(conversion_results)
+```
+
+### Integration with Cross-Validation
+
+```python
+from conversion_analyzer import (
+    analyze_conversion_predictions,
+    print_conversion_accuracy_report,
+    aggregate_conversion_results
+)
+
+fold_conversion_results = []
+
+for fold in range(num_folds):
+    # Train and test model
+    # ...
+    
+    # Analyze this fold
+    conversion_results = analyze_conversion_predictions(
+        test_subjects,
+        test_results['predictions'],
+        test_results['targets'],
+        label_csv_path
+    )
+    
+    print(f"\n=== Fold {fold + 1} Conversion Analysis ===")
+    print_conversion_accuracy_report(conversion_results)
+    
+    fold_conversion_results.append(conversion_results)
+
+# Aggregate across all folds
+print("\n=== Aggregated Results Across All Folds ===")
+aggregated = aggregate_conversion_results(fold_conversion_results)
+print_conversion_accuracy_report(aggregated)
+```
+
+### Example Output
+
+```
+=== Conversion-Specific Accuracy Analysis ===
+
+Total test subjects in this fold: 87
+
+CN-Stable:
+  Overall: 15/18 correct (0.833)
+  Stable predictions: 15/18 correct (0.833)
+
+CN->MCI:
+  Overall: 3/5 correct (0.600)
+  Converter predictions: 3/5 correct (0.600)
+
+MCI-Stable:
+  Overall: 28/42 correct (0.667)
+  Stable predictions: 28/42 correct (0.667)
+
+MCI->AD:
+  Overall: 12/20 correct (0.600)
+  Converter predictions: 12/20 correct (0.600)
+
+AD-Stable:
+  Overall: 2/2 correct (1.000)
+  Stable predictions: 2/2 correct (1.000)
+```
+
+### Detailed Analysis per Subject
+
+```python
+from conversion_analyzer import get_subject_conversion_type
+import pandas as pd
+
+# Load label data
+label_df = pd.read_csv('data/TADPOLE_Simplified.csv')
+label_df['Subject'] = label_df['Subject'].str.replace('_', '', regex=False)
+
+# Analyze each test subject
+for i, subject_id in enumerate(test_subjects):
+    conversion_type = get_subject_conversion_type(subject_id, label_df)
+    prediction = predictions[i]
+    target = targets[i]
+    correct = "✓" if prediction == target else "✗"
+    
+    print(f"{subject_id}: {conversion_type:15s} "
+          f"Pred={prediction} True={target} {correct}")
+```
+
+### Custom Analysis Functions
+
+```python
+from conversion_analyzer import analyze_conversion_predictions
+import numpy as np
+
+def analyze_confidence_by_trajectory(test_subjects, predictions, 
+                                     probabilities, targets, label_csv_path):
+    """
+    Analyze prediction confidence by conversion trajectory.
+    """
+    conversion_results = analyze_conversion_predictions(
+        test_subjects, predictions, targets, label_csv_path
+    )
+    
+    # Add confidence analysis
+    label_df = pd.read_csv(label_csv_path)
+    label_df['Subject'] = label_df['Subject'].str.replace('_', '', regex=False)
+    
+    confidence_by_type = {}
+    
+    for i, subject_id in enumerate(test_subjects):
+        conv_type = get_subject_conversion_type(subject_id, label_df)
+        
+        if conv_type not in confidence_by_type:
+            confidence_by_type[conv_type] = []
+        
+        # Confidence = max probability
+        confidence = np.max(probabilities[i])
+        confidence_by_type[conv_type].append(confidence)
+    
+    # Print average confidence
+    print("\nAverage Prediction Confidence by Trajectory:")
+    for conv_type in sorted(confidence_by_type.keys()):
+        avg_conf = np.mean(confidence_by_type[conv_type])
+        print(f"  {conv_type:15s}: {avg_conf:.3f}")
+    
+    return confidence_by_type
+
+# Use in evaluation
+confidence_analysis = analyze_confidence_by_trajectory(
+    test_subjects,
+    test_results['predictions'],
+    test_results['probabilities'],
+    test_results['targets'],
+    label_csv_path
+)
+```
+
+### Complete Pipeline from main.py
+
+```python
+from conversion_analyzer import (
+    analyze_conversion_predictions,
+    print_conversion_accuracy_report,
+    aggregate_conversion_results
+)
+
+fold_conversion_results = []
+
+for fold, split in enumerate(fold_splits):
+    # ... train model ...
+    
+    # Test evaluation
+    test_results = evaluate_detailed(test_loader, return_probs=True)
+    
+    # Standard metrics
+    print(f"\nTest Accuracy: {test_results['accuracy']:.3f}")
+    print(f"Balanced Accuracy: {test_results['balanced_accuracy']:.3f}")
+    print(f"Minority F1: {test_results['minority_f1']:.3f}")
+    print(f"AUC: {test_results['auc']:.3f}")
+    
+    # Conversion-specific analysis
+    label_csv_path = os.path.join(data_path, "TADPOLE_Simplified.csv")
+    conversion_results = analyze_conversion_predictions(
+        test_subjects,
+        test_results['predictions'],
+        test_results['targets'],
+        label_csv_path
+    )
+    print_conversion_accuracy_report(conversion_results)
+    
+    fold_conversion_results.append(conversion_results)
+
+# Aggregate across folds
+print("\n" + "="*50)
+print("AGGREGATED RESULTS ACROSS ALL FOLDS")
+print("="*50)
+aggregated_conversion_results = aggregate_conversion_results(
+    fold_conversion_results
+)
+print_conversion_accuracy_report(aggregated_conversion_results)
+```
+
+## Conversion Trajectory Types
+
+### CN-Stable
+Cognitively Normal subjects who remain stable throughout the study period.
+
+### CN→MCI
+Cognitively Normal subjects who progress to Mild Cognitive Impairment.
+
+### MCI-Stable
+Mild Cognitive Impairment subjects who remain stable (do not progress to AD).
+
+### MCI→AD
+Mild Cognitive Impairment subjects who progress to Alzheimer's Disease.
+
+### AD-Stable
+Alzheimer's Disease subjects (typically stable as they're already at advanced stage).
+
+## Best Practices
+
+<Tip>
+Always run conversion analysis alongside standard metrics to understand model behavior on different progression patterns.
+</Tip>
+
+<Warning>
+Ensure your label CSV has the correct format with `Subject`, `Group`, and `Label_CS_Num` columns.
+</Warning>
+
+<Note>
+Subject IDs are automatically cleaned (underscores removed) to match different naming conventions.
+</Note>
+
+## Understanding the Results
+
+### Interpretation Guide
+
+**High accuracy on stable groups (CN-Stable, MCI-Stable):**
+- Model is good at identifying subjects who won't convert
+- May indicate prediction bias toward the majority class
+
+**High accuracy on converter groups (CN→MCI, MCI→AD):**
+- Model successfully identifies early signs of conversion
+- Critical for clinical utility
+
+**Imbalanced performance:**
+- If stable >> converter accuracy: Model may be too conservative
+- If converter >> stable accuracy: Model may be over-predicting conversion
+
+### Clinical Significance
+
+```
+Most clinically valuable predictions:
+1. MCI→AD with high confidence
+   → Identify candidates for intervention
+
+2. CN→MCI early detection
+   → Enable preventive measures
+
+3. MCI-Stable accurate predictions
+   → Reduce unnecessary interventions
+```
+
+## Related
+
+- [Metrics](/evaluation/metrics) - Complete evaluation pipeline
+- [Training Overview](/training/training-overview) - Integration with training workflow
+- [Performance](/evaluation/performance) - Understanding model metrics

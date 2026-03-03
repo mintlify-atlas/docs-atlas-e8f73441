@@ -1,0 +1,293 @@
+---
+title: 'GNN Encoder'
+description: 'GraphNeuralNetwork class for encoding brain connectivity graphs into fixed-size embeddings'
+---
+
+## Overview
+
+The `GraphNeuralNetwork` class serves as the spatial encoder in the STGNN architecture. It processes brain connectivity graphs through multiple graph convolutional layers, supporting GCN, GAT, and GraphSAGE architectures with optional TopK pooling for hierarchical graph coarsening.
+
+The encoder outputs fixed-size graph embeddings by combining global mean and max pooling operations, optionally incorporating time-to-predict features for temporal awareness.
+
+## Class Signature
+
+```python
+class GraphNeuralNetwork(nn.Module):
+    def __init__(self, input_dim=100, hidden_dim=128, output_dim=256, dropout=0.5, 
+                 use_topk_pooling=True, topk_ratio=0.5, layer_type="GCN", 
+                 num_layers=3, activation='relu', use_time_features=False)
+```
+
+## Initialization Parameters
+
+<ParamField path="input_dim" type="int" default={100}>
+  Dimension of input node features (e.g., ROI-level brain features)
+</ParamField>
+
+<ParamField path="hidden_dim" type="int" default={128}>
+  Dimension of hidden layers in the GNN. Used for all intermediate layers between input and output.
+</ParamField>
+
+<ParamField path="output_dim" type="int" default={256}>
+  Dimension of the final GNN layer output. The actual output will be `output_dim * 2` due to concatenation of mean and max pooling.
+</ParamField>
+
+<ParamField path="dropout" type="float" default={0.5}>
+  Dropout rate applied after each graph convolution layer to prevent overfitting.
+</ParamField>
+
+<ParamField path="use_topk_pooling" type="bool" default={true}>
+  Whether to use TopK pooling for hierarchical graph coarsening. If `False`, uses global pooling only.
+</ParamField>
+
+<ParamField path="topk_ratio" type="float" default={0.5}>
+  Ratio of nodes to keep in TopK pooling. Automatically clipped to minimum 0.3 (30%) to prevent empty graphs.
+</ParamField>
+
+<ParamField path="layer_type" type="str" default="GCN">
+  Type of graph convolutional layer. Options:
+  - `"GCN"`: Graph Convolutional Network
+  - `"GAT"`: Graph Attention Network
+  - `"GraphSAGE"`: GraphSAGE with mean aggregation
+</ParamField>
+
+<ParamField path="num_layers" type="int" default={3}>
+  Number of graph convolutional layers. Architecture dynamically adapts layer dimensions:
+  - First layer: `input_dim` → `hidden_dim`
+  - Middle layers: `hidden_dim` → `hidden_dim`
+  - Last layer: `hidden_dim` → `output_dim`
+</ParamField>
+
+<ParamField path="activation" type="str" default="relu">
+  Activation function applied after each layer. Options: `"relu"`, `"leaky_relu"`, `"elu"`, `"gelu"`
+</ParamField>
+
+<ParamField path="use_time_features" type="bool" default={false}>
+  Whether to incorporate time-to-predict features. When enabled, creates a fusion layer that combines graph embeddings with projected time features (32D projection to prevent dominance over graph features).
+</ParamField>
+
+## Forward Method
+
+```python
+def forward(self, x, edge_index, batch, time_to_predict=None):
+    """
+    Args:
+        x (torch.Tensor): Node feature matrix [num_nodes, input_dim]
+        edge_index (torch.Tensor): Graph connectivity [2, num_edges]
+        batch (torch.Tensor): Batch assignment vector [num_nodes]
+        time_to_predict (torch.Tensor, optional): Time delta for prediction [B] or [B, 1]
+    
+    Returns:
+        torch.Tensor: Graph embeddings [B, output_dim * 2] or [B, output_dim * 2] after fusion
+    """
+```
+
+### Input Parameters
+
+<ParamField path="x" type="torch.Tensor">
+  Node feature matrix with shape `[num_nodes, input_dim]`. Contains features for all nodes across all graphs in the batch.
+</ParamField>
+
+<ParamField path="edge_index" type="torch.Tensor">
+  Graph connectivity in COO format with shape `[2, num_edges]`. First row contains source nodes, second row contains target nodes.
+</ParamField>
+
+<ParamField path="batch" type="torch.Tensor">
+  Batch assignment vector with shape `[num_nodes]`. Maps each node to its graph index in the batch.
+</ParamField>
+
+<ParamField path="time_to_predict" type="torch.Tensor" default={null}>
+  Time delta for prediction with shape `[B]` or `[B, 1]`. Only used when `use_time_features=True`. Represents the time horizon for disease progression prediction.
+</ParamField>
+
+### Returns
+
+- **Without time features**: `[B, output_dim * 2]` tensor (mean + max pooling concatenation)
+- **With time features**: `[B, output_dim * 2]` tensor after fusion layer combines graph and time embeddings
+
+## Architecture Details
+
+### Layer Construction
+
+The model dynamically constructs layers based on `num_layers`:
+
+```python
+for i in range(num_layers):
+    if i == 0:
+        # First layer: input_dim -> hidden_dim
+        in_dim = input_dim
+        out_dim = hidden_dim
+    elif i == num_layers - 1:
+        # Last layer: hidden_dim -> output_dim
+        in_dim = hidden_dim
+        out_dim = output_dim
+    else:
+        # Middle layers: hidden_dim -> hidden_dim
+        in_dim = hidden_dim
+        out_dim = hidden_dim
+```
+
+### Forward Pass Flow
+
+**With TopK Pooling** (`use_topk_pooling=True`):
+
+```python
+for i in range(num_layers):
+    x = conv_layer(x, edge_index)
+    x = graph_norm(x, batch)
+    x = activation(x)
+    x = dropout(x)
+    x, edge_index, _, batch, perm, score = topk_pool(x, edge_index, batch=batch)
+
+# Global pooling on remaining nodes
+x_mean = global_mean_pool(x, batch)
+x_max = global_max_pool(x, batch)
+x = concat([x_mean, x_max])
+```
+
+**Without TopK Pooling** (`use_topk_pooling=False`):
+
+```python
+for i in range(num_layers):
+    x = conv_layer(x, edge_index)
+    x = graph_norm(x, batch)
+    x = activation(x)
+    x = dropout(x)
+
+# Global pooling on all nodes
+x_mean = global_mean_pool(x, batch)
+x_max = global_max_pool(x, batch)
+x = concat([x_mean, x_max])
+```
+
+### Time Feature Integration
+
+When `use_time_features=True`:
+
+1. **Time Projection**: Projects 1D time input to 32D embedding through a 2-layer MLP
+   ```python
+   time_projection:
+     Linear(1 -> 16) -> ReLU -> Dropout -> Linear(16 -> 32)
+   ```
+
+2. **Fusion Layer**: Combines graph embeddings (512D = 256×2) with time embeddings (32D)
+   ```python
+   fusion_layer:
+     Linear(544 -> 512) -> ReLU -> Dropout
+   ```
+
+The small time dimension (32D vs 512D graph features) prevents time from dominating the learned representation.
+
+## Usage Example
+
+### Basic GCN Encoder
+
+```python
+import torch
+from model import GraphNeuralNetwork
+
+# Initialize encoder
+encoder = GraphNeuralNetwork(
+    input_dim=100,      # ROI features
+    hidden_dim=128,
+    output_dim=256,
+    dropout=0.5,
+    use_topk_pooling=True,
+    topk_ratio=0.5,
+    layer_type="GCN",
+    num_layers=3
+)
+
+# Forward pass
+x = torch.randn(500, 100)  # 500 nodes, 100 features each
+edge_index = torch.randint(0, 500, (2, 1000))  # 1000 edges
+batch = torch.cat([torch.zeros(250, dtype=torch.long), 
+                   torch.ones(250, dtype=torch.long)])  # 2 graphs
+
+embedding = encoder(x, edge_index, batch)
+print(embedding.shape)  # torch.Size([2, 512])
+```
+
+### GAT Encoder with Time Features
+
+```python
+# Initialize GAT encoder with temporal awareness
+encoder = GraphNeuralNetwork(
+    input_dim=100,
+    hidden_dim=128,
+    output_dim=256,
+    dropout=0.3,
+    use_topk_pooling=False,  # Use global pooling only
+    layer_type="GAT",
+    num_layers=3,
+    activation='elu',
+    use_time_features=True
+)
+
+# Forward pass with time prediction
+x = torch.randn(500, 100)
+edge_index = torch.randint(0, 500, (2, 1000))
+batch = torch.cat([torch.zeros(250, dtype=torch.long), 
+                   torch.ones(250, dtype=torch.long)])
+time_to_predict = torch.tensor([6.0, 12.0])  # Predict at 6 and 12 months
+
+embedding = encoder(x, edge_index, batch, time_to_predict)
+print(embedding.shape)  # torch.Size([2, 512])
+```
+
+### GraphSAGE with Custom Configuration
+
+```python
+# Deep GraphSAGE encoder
+encoder = GraphNeuralNetwork(
+    input_dim=150,
+    hidden_dim=256,
+    output_dim=512,
+    dropout=0.4,
+    use_topk_pooling=True,
+    topk_ratio=0.7,  # Keep 70% of nodes (clamped to min 30%)
+    layer_type="GraphSAGE",
+    num_layers=5,
+    activation='gelu'
+)
+```
+
+## Key Features
+
+### Adaptive TopK Pooling
+
+TopK pooling ratios are automatically safeguarded:
+```python
+safe_ratio = max(0.3, min(1.0, topk_ratio))  # Minimum 30% retention
+```
+
+This prevents empty graphs from occurring in deep architectures.
+
+### GraphNorm Layers
+
+Each convolutional layer is followed by GraphNorm for stable training:
+```python
+self.gns.append(GraphNorm(out_dim))
+```
+
+### Dual Pooling Strategy
+
+Combines mean and max pooling for richer graph-level representations:
+- **Mean pooling**: Captures average node properties
+- **Max pooling**: Captures salient node features
+
+## Model Output
+
+The final output dimensions depend on configuration:
+
+| Configuration | Output Shape | Notes |
+|--------------|--------------|-------|
+| Standard (no time) | `[B, output_dim * 2]` | Mean + max pooling |
+| With time features | `[B, output_dim * 2]` | After fusion layer |
+| `output_dim=256` | `[B, 512]` | Most common configuration |
+
+## See Also
+
+- [Pooling Strategies](/models/pooling-strategies) - Detailed comparison of TopK vs global pooling
+- [Temporal Predictor](/models/temporal-predictor) - LSTM module that processes GNN embeddings
+- [Training Configuration](/training/configuration) - Hyperparameter tuning guidelines

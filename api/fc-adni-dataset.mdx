@@ -1,0 +1,211 @@
+---
+title: FC_ADNIDataset
+description: Dataset class for loading functional connectivity (FC) brain graphs from ADNI data
+---
+
+## Overview
+
+`FC_ADNIDataset` is a PyTorch Geometric dataset class for loading and processing functional connectivity matrices from ADNI brain imaging data. It extends `InMemoryDataset` and converts FC matrices into graph structures with temporal metadata.
+
+## Class Definition
+
+```python
+class FC_ADNIDataset(InMemoryDataset)
+```
+
+## Constructor
+
+```python
+FC_ADNIDataset(
+    root,
+    threshold=0.2,
+    label_csv='TADPOLE_TEMPORAL.csv',
+    var_name='arr_0',
+    transform=None,
+    pre_transform=None
+)
+```
+
+### Parameters
+
+<ParamField path="root" type="str" required>
+  Root directory containing the dataset files. Expected structure:
+  - `FC_Matrices/` subdirectory with `.npz` files
+  - Label CSV file (default: `TADPOLE_TEMPORAL.csv`)
+</ParamField>
+
+<ParamField path="threshold" type="float" default="0.2">
+  Threshold for edge filtering. Edges with absolute correlation values below this threshold are removed from the graph.
+</ParamField>
+
+<ParamField path="label_csv" type="str" default="'TADPOLE_TEMPORAL.csv'">
+  Filename of the CSV containing subject labels and visit information. Must be located in the root directory.
+</ParamField>
+
+<ParamField path="var_name" type="str" default="'arr_0'">
+  Name of the variable in the `.npz` files containing the FC matrix data.
+</ParamField>
+
+<ParamField path="transform" type="callable" default="None">
+  Optional transform to apply to data objects on-the-fly.
+</ParamField>
+
+<ParamField path="pre_transform" type="callable" default="None">
+  Optional transform to apply during data processing.
+</ParamField>
+
+## Attributes
+
+<ResponseField name="data" type="torch_geometric.data.Data">
+  Collated data object containing all graphs.
+</ResponseField>
+
+<ResponseField name="slices" type="dict">
+  Dictionary mapping attributes to their slice indices for efficient indexing.
+</ResponseField>
+
+<ResponseField name="threshold" type="float">
+  The correlation threshold used for edge filtering.
+</ResponseField>
+
+<ResponseField name="subject_graph_dict" type="dict or None">
+  Dictionary mapping subject IDs to their graph data (initialized as None).
+</ResponseField>
+
+## Methods
+
+### fc_to_graph
+
+Converts a functional connectivity matrix into a PyTorch Geometric graph object.
+
+```python
+fc_to_graph(
+    matrix,
+    node_features=None,
+    subj_id=None
+) -> Data
+```
+
+**Parameters:**
+- `matrix` (numpy.ndarray): FC matrix of shape (N, N)
+- `node_features` (numpy.ndarray, optional): Node feature matrix. If None, uses normalized identity matrix
+- `subj_id` (str, optional): Subject identifier to attach to the graph
+
+**Returns:**
+- `Data`: PyTorch Geometric Data object with `x`, `edge_index`, `edge_attr`, and optionally `subj_id`
+
+### load_fc_graphs
+
+Loads all FC matrices from the specified directory and converts them to graphs.
+
+```python
+load_fc_graphs(base_path) -> dict
+```
+
+**Parameters:**
+- `base_path` (str): Path to directory containing FC matrix `.npz` files
+
+**Returns:**
+- `dict`: Dictionary mapping subject IDs (format: `{subj_id}_run{run_num}`) to graph Data objects
+
+### load_subject_labels_and_visits
+
+Loads subject labels and visit temporal information from CSV file.
+
+```python
+load_subject_labels_and_visits(
+    label_csv_path,
+    label_col='Label_CS_Num'
+) -> tuple[dict, dict]
+```
+
+**Parameters:**
+- `label_csv_path` (str): Path to CSV file with labels and visit data
+- `label_col` (str): Column name containing the label values
+
+**Returns:**
+- `tuple`: Two dictionaries:
+  - `label_dict`: Maps subject IDs to labels (uses last visit's label)
+  - `visit_dict`: Maps subject IDs and run keys to visit metadata including `visit_code`, `visit_months`, and `months_to_next`
+
+## Data Format
+
+Each graph in the dataset has the following attributes:
+
+- `x`: Node feature matrix (default: identity matrix scaled by 1.0)
+- `edge_index`: Graph connectivity in COO format
+- `edge_attr`: Edge weights (correlation values)
+- `y`: Subject label (diagnosis)
+- `subj_id`: Subject identifier (format: `{subject_id}_run{run_num}`)
+- `visit_code`: Visit identifier (e.g., 'bl', 'm06', 'm12')
+- `visit_months`: Months from baseline for this visit
+- `months_to_next`: Months until next visit (-1 if no next visit)
+
+## Usage Example
+
+```python
+import torch
+from FC_ADNIDataset import FC_ADNIDataset
+from torch_geometric.loader import DataLoader
+
+# Initialize dataset
+dataset = FC_ADNIDataset(
+    root='data/adni',
+    threshold=0.3,
+    label_csv='TADPOLE_TEMPORAL.csv',
+    var_name='arr_0'
+)
+
+print(f"Number of graphs: {len(dataset)}")
+print(f"Number of features: {dataset.num_features}")
+print(f"Number of classes: {dataset.num_classes}")
+
+# Access a single graph
+graph = dataset[0]
+print(f"Subject ID: {graph.subj_id}")
+print(f"Visit: {graph.visit_code} at {graph.visit_months} months")
+print(f"Months to next visit: {graph.months_to_next}")
+print(f"Label: {graph.y.item()}")
+print(f"Nodes: {graph.num_nodes}, Edges: {graph.num_edges}")
+
+# Create a DataLoader
+loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+for batch in loader:
+    # Process batch
+    print(f"Batch size: {batch.num_graphs}")
+    print(f"Total nodes: {batch.num_nodes}")
+    print(f"Total edges: {batch.num_edges}")
+    break
+```
+
+## File Format Requirements
+
+### FC Matrix Files
+
+Expected filename format: `sub-{SUBJECT_ID}_run-{RUN_NUM}_fc_matrix.npz`
+
+Example: `sub-002S0413_run-01_fc_matrix.npz`
+
+Each `.npz` file should contain:
+- A numpy array with key matching `var_name` parameter (default: `'arr_0'`)
+- Array shape: (N, N) where N is the number of brain regions
+- Values represent correlation coefficients between regions
+
+### Label CSV Format
+
+Required columns:
+- `Subject`: Subject identifier
+- `Label_CS_Num`: Numeric label (diagnosis category)
+- `Visit`: Visit code (e.g., 'bl', 'm06', 'm12')
+- `Visit_Order`: Chronological order of visits
+- `Months_From_Baseline`: Time in months from baseline visit
+- `Months_To_Next_Original`: Months until next visit (optional)
+
+## Notes
+
+- FC matrices are automatically symmetrized: `(matrix + matrix.T) / 2`
+- Edges below the threshold are filtered out to create sparse graphs
+- Subject IDs have underscores removed for label matching
+- For subjects with multiple visits, the last visit's label is used as the overall subject label
+- Node features default to a scaled identity matrix (scale factor: 1.0) to maintain appropriate scale for GNN processing

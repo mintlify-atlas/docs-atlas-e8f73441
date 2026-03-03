@@ -1,0 +1,410 @@
+---
+title: Temporal Gap Processor
+description: Functions for processing temporal gaps between medical visits and creating time-aware features
+---
+
+## Overview
+
+The `temporal_gap_processor` module provides utilities for analyzing and processing temporal information in longitudinal medical data. It handles VISCODE parsing, temporal gap calculation, and normalization for time-aware prediction models.
+
+## Core Functions
+
+### parse_viscode_to_months
+
+```python
+def parse_viscode_to_months(viscode: str) -> int
+```
+
+Converts ADNI visit codes (VISCODE) to standardized months since baseline.
+
+<ParamField path="viscode" type="str">
+  ADNI visit code (e.g., 'bl', 'sc', 'm06', 'm12', 'v11', 'y1').
+</ParamField>
+
+<ResponseField name="months" type="int">
+  Number of months since baseline. Returns -1 for undefined visits, 0 for baseline.
+</ResponseField>
+
+#### Supported VISCODE Formats
+
+| Format | Example | Meaning |
+|--------|---------|----------|
+| Baseline | `'bl'`, `'sc'`, `'scmri'`, `'init'` | 0 months |
+| ADNI-1/GO | `'m03'`, `'m06'`, `'m12'`, `'m48'` | Direct months |
+| ADNI-2 | `'v02'`, `'v03'`, `'v11'`, `'v21'` | Visit codes |
+| ADNI-3 | `'y1'`, `'y2'`, `'y3'` | Year codes (×12) |
+| Special | `'nv'`, `'uns1'`, `'tel*'` | -1 (undefined) |
+
+### calculate_temporal_gaps
+
+```python
+def calculate_temporal_gaps(
+    df: pd.DataFrame,
+    subject_col: str = 'Subject',
+    visit_col: str = 'Visit'
+) -> pd.DataFrame
+```
+
+Calculates temporal gaps between consecutive visits for each subject.
+
+<ParamField path="df" type="pd.DataFrame">
+  DataFrame containing subject and visit information.
+</ParamField>
+
+<ParamField path="subject_col" type="str" default="'Subject'">
+  Column name containing subject identifiers.
+</ParamField>
+
+<ParamField path="visit_col" type="str" default="'Visit'">
+  Column name containing VISCODE values.
+</ParamField>
+
+<ResponseField name="df_with_gaps" type="pd.DataFrame">
+  Original DataFrame with added columns:
+  - `visit_months`: Months since baseline for this visit
+  - `months_to_next`: Months until next visit (NaN for last visit)
+  - `visit_order`: Sequential visit number per subject
+</ResponseField>
+
+### normalize_time_gaps
+
+```python
+def normalize_time_gaps(
+    gaps: np.ndarray,
+    method: str = 'log',
+    max_months: float = 60.0
+) -> np.ndarray
+```
+
+Normalizes temporal gaps using various scaling methods.
+
+<ParamField path="gaps" type="np.ndarray">
+  Array of temporal gaps in months.
+</ParamField>
+
+<ParamField path="method" type="str" default="'log'">
+  Normalization method: `'log'`, `'minmax'`, `'buckets'`, or `'raw'`.
+</ParamField>
+
+<ParamField path="max_months" type="float" default="60.0">
+  Maximum months for minmax normalization.
+</ParamField>
+
+<ResponseField name="normalized_gaps" type="np.ndarray">
+  Normalized gap values.
+</ResponseField>
+
+#### Normalization Methods
+
+**Log Scale (default)**
+```python
+log(1 + months/12)
+```
+Best for capturing both short and long-term changes.
+
+**MinMax**
+```python
+clip(months / max_months, 0, 1)
+```
+Linear scaling to [0, 1] range.
+
+**Buckets**
+```python
+0.25: 0-6 months
+0.50: 6-12 months
+0.75: 12-24 months
+1.00: 24+ months
+```
+Categorical bucketing for different horizons.
+
+**Raw**
+```python
+months / 12  # Convert to years
+```
+Unscaled temporal values.
+
+### create_temporal_features
+
+```python
+def create_temporal_features(
+    visit_sequence: List[str],
+    normalization: str = 'log'
+) -> Tuple[List[int], List[float]]
+```
+
+Creates temporal features for a sequence of visit codes.
+
+<ParamField path="visit_sequence" type="List[str]">
+  List of VISCODE strings in chronological order.
+</ParamField>
+
+<ParamField path="normalization" type="str" default="'log'">
+  Normalization method for gaps.
+</ParamField>
+
+<ResponseField name="visit_months" type="List[int]">
+  Months since baseline for each visit.
+</ResponseField>
+
+<ResponseField name="normalized_gaps" type="List[float]">
+  Normalized gaps to next visit (-1 for final visit).
+</ResponseField>
+
+### analyze_temporal_distribution
+
+```python
+def analyze_temporal_distribution(
+    df: pd.DataFrame,
+    visit_col: str = 'Visit',
+    output_stats: bool = True
+) -> Dict
+```
+
+Analyzes the temporal distribution of visits in a dataset.
+
+<ParamField path="df" type="pd.DataFrame">
+  DataFrame containing visit information.
+</ParamField>
+
+<ParamField path="visit_col" type="str" default="'Visit'">
+  Column containing visit codes.
+</ParamField>
+
+<ParamField path="output_stats" type="bool" default="True">
+  Whether to print statistics to console.
+</ParamField>
+
+<ResponseField name="stats" type="Dict">
+  Dictionary containing:
+  - `total_visits`: Total number of visits
+  - `valid_visits`: Visits with defined temporal codes
+  - `unique_timepoints`: Number of unique time values
+  - `min_months`, `max_months`: Range of visit times
+  - `mean_months`, `median_months`: Central tendency
+  - `baseline_visits`: Count at month 0
+  - `visits_0_6m`, `visits_6_12m`, etc.: Visit distribution by time horizon
+</ResponseField>
+
+## Usage Examples
+
+### Basic VISCODE Parsing
+
+```python
+from temporal_gap_processor import parse_viscode_to_months
+
+# Parse various visit codes
+print(parse_viscode_to_months('bl'))      # 0
+print(parse_viscode_to_months('m06'))    # 6
+print(parse_viscode_to_months('m12'))    # 12
+print(parse_viscode_to_months('v11'))    # 12 (ADNI-2 year 1)
+print(parse_viscode_to_months('y2'))     # 24 (ADNI-3 year 2)
+print(parse_viscode_to_months('m48'))    # 48
+```
+
+### Calculate Temporal Gaps
+
+```python
+import pandas as pd
+from temporal_gap_processor import calculate_temporal_gaps
+
+# Load your dataset
+df = pd.read_csv('TADPOLE_Simplified.csv')
+
+# Add temporal features
+df_with_gaps = calculate_temporal_gaps(
+    df,
+    subject_col='Subject',
+    visit_col='Visit'
+)
+
+# Inspect results
+print(df_with_gaps[[
+    'Subject', 'Visit', 'visit_months',
+    'months_to_next', 'visit_order'
+]].head(10))
+```
+
+### Normalize Time Gaps
+
+```python
+import numpy as np
+from temporal_gap_processor import normalize_time_gaps
+
+# Example gaps in months
+gaps = np.array([3, 6, 12, 24, 48])
+
+# Try different normalization methods
+log_gaps = normalize_time_gaps(gaps, method='log')
+minmax_gaps = normalize_time_gaps(gaps, method='minmax')
+bucket_gaps = normalize_time_gaps(gaps, method='buckets')
+raw_gaps = normalize_time_gaps(gaps, method='raw')
+
+print("Log scale:", log_gaps)
+print("MinMax:", minmax_gaps)
+print("Buckets:", bucket_gaps)
+print("Raw (years):", raw_gaps)
+```
+
+### Create Features for Visit Sequence
+
+```python
+from temporal_gap_processor import create_temporal_features
+
+# Patient's visit sequence
+visit_sequence = ['bl', 'm06', 'm12', 'm24', 'm48']
+
+# Generate features
+visit_months, gaps = create_temporal_features(
+    visit_sequence,
+    normalization='log'
+)
+
+print("Visit months:", visit_months)
+print("Gaps to next:", gaps)
+
+# Output:
+# Visit months: [0, 6, 12, 24, 48]
+# Gaps to next: [0.405, 0.405, 0.693, 1.099, -1]
+```
+
+### Analyze Dataset Distribution
+
+```python
+from temporal_gap_processor import analyze_temporal_distribution
+import pandas as pd
+
+df = pd.read_csv('data/TADPOLE_Simplified.csv')
+
+# Get comprehensive statistics
+stats = analyze_temporal_distribution(
+    df,
+    visit_col='Visit',
+    output_stats=True
+)
+
+print(f"Total subjects: {df['Subject'].nunique()}")
+print(f"Average visits per subject: {len(df) / df['Subject'].nunique():.1f}")
+print(f"Time range: {stats['min_months']}-{stats['max_months']} months")
+```
+
+### Integration with Training
+
+```python
+from temporal_gap_processor import (
+    create_temporal_features,
+    normalize_time_gaps
+)
+import torch
+
+def prepare_temporal_batch(visit_codes, normalization='log'):
+    """
+    Prepare temporal features for a batch of sequences.
+    """
+    batch_gaps = []
+    
+    for visit_seq in visit_codes:
+        _, gaps = create_temporal_features(
+            visit_seq,
+            normalization=normalization
+        )
+        batch_gaps.append(gaps)
+    
+    # Convert to tensor
+    max_len = max(len(g) for g in batch_gaps)
+    gap_tensor = torch.zeros(len(batch_gaps), max_len)
+    
+    for i, gaps in enumerate(batch_gaps):
+        gap_tensor[i, :len(gaps)] = torch.tensor(gaps)
+    
+    return gap_tensor
+
+# Use in training loop
+gap_features = prepare_temporal_batch(
+    batch_visit_codes,
+    normalization=opt.time_normalization
+)
+```
+
+### Complete Pipeline Example
+
+```python
+from temporal_gap_processor import (
+    calculate_temporal_gaps,
+    analyze_temporal_distribution,
+    create_temporal_features
+)
+import pandas as pd
+
+# 1. Load and process dataset
+df = pd.read_csv('data/TADPOLE_Simplified.csv')
+
+# 2. Add temporal gap features
+df = calculate_temporal_gaps(df)
+
+# 3. Analyze distribution
+print("\n=== Dataset Temporal Analysis ===")
+stats = analyze_temporal_distribution(df)
+
+# 4. Process individual subject sequences
+for subject_id in df['Subject'].unique()[:3]:
+    subject_visits = df[df['Subject'] == subject_id]['Visit'].tolist()
+    visit_months, gaps = create_temporal_features(subject_visits)
+    
+    print(f"\nSubject {subject_id}:")
+    print(f"  Visits: {subject_visits}")
+    print(f"  Months: {visit_months}")
+    print(f"  Gaps: {gaps}")
+```
+
+## Configuration in main.py
+
+```python
+parser.add_argument('--use_time_features', action='store_true',
+                   help='use temporal gap features for time-aware prediction')
+parser.add_argument('--time_normalization', type=str, default='log',
+                   help='time normalization method: log, minmax, buckets, raw')
+parser.add_argument('--single_visit_horizon', type=int, default=6,
+                   help='default prediction horizon (months) for single-visit subjects')
+```
+
+## Best Practices
+
+<Tip>
+Use `'log'` normalization for most cases - it captures both short-term and long-term temporal patterns effectively.
+</Tip>
+
+<Warning>
+Always handle missing or undefined visit codes (return value -1) appropriately in your model.
+</Warning>
+
+<Note>
+The last visit in a sequence always has gap=-1 since there's no "next" visit to predict.
+</Note>
+
+## VISCODE Reference
+
+### Complete Mapping
+
+```python
+viscode_mapping = {
+    # Baseline (0 months)
+    'sc': 0, 'scmri': 0, 'bl': 0, 'init': 0,
+    'v02': 0, 'v03': 0, 'v06': 0,
+    
+    # ADNI-2 timeline
+    'v04': 3, 'v05': 6, 'v11': 12, 'v21': 24,
+    'v31': 36, 'v41': 48, 'v51': 60,
+    
+    # ADNI-3 timeline
+    'y1': 12, 'y2': 24, 'y3': 36, 'y4': 48, 'y5': 60,
+    
+    # ADNI-1/GO: m{XX} -> XX months
+    # e.g., 'm03' -> 3, 'm12' -> 12
+}
+```
+
+## Related
+
+- [Temporal Data Loader](/api/temporal-dataloader) - Using temporal features in data loading
+- [Graph Neural Network](/api/graph-neural-network) - Integrating time features in GNN encoder
+- [Time-Aware Prediction](/advanced/time-aware-prediction) - Complete temporal training guide

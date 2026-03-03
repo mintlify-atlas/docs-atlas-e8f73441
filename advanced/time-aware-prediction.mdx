@@ -1,0 +1,274 @@
+---
+title: Time-Aware Prediction
+description: Temporal gap features and time normalization for improved prediction accuracy
+---
+
+## Overview
+
+STGNN supports time-aware prediction using temporal gap features that capture the time intervals between patient visits and to future prediction targets. This enables the model to account for varying prediction horizons and improve accuracy for both short-term and long-term forecasts.
+
+## Temporal Gap Processing
+
+The `temporal_gap_processor.py` module provides comprehensive utilities for parsing visit codes, calculating temporal gaps, and normalizing time features.
+
+### VISCODE Parsing
+
+The system automatically parses ADNI visit codes to standardized month values:
+
+```python
+from temporal_gap_processor import parse_viscode_to_months
+
+# Baseline visits (0 months)
+parse_viscode_to_months('bl')      # → 0
+parse_viscode_to_months('scmri')   # → 0
+parse_viscode_to_months('v02')     # → 0
+
+# Follow-up visits
+parse_viscode_to_months('v04')     # → 3 months
+parse_viscode_to_months('m06')     # → 6 months
+parse_viscode_to_months('v11')     # → 12 months
+parse_viscode_to_months('y2')      # → 24 months
+```
+
+Supported VISCODE formats:
+- **Baseline codes**: `sc`, `scmri`, `bl`, `init`, `v02`, `v03`, `v06`
+- **ADNI-1/GO**: `m03`, `m06`, `m12`, `m18`, `m24`, `m36`, `m48`, etc.
+- **ADNI-2**: `v04` (3m), `v05` (6m), `v11` (12m), `v21` (24m), `v31` (36m), etc.
+- **ADNI-3**: `y1`, `y2`, `y3`, `y4`, `y5`
+
+See `temporal_gap_processor.py:6-56` for the complete mapping.
+
+### Calculating Temporal Gaps
+
+Use `calculate_temporal_gaps()` to compute time intervals between consecutive visits:
+
+```python
+from temporal_gap_processor import calculate_temporal_gaps
+import pandas as pd
+
+df = pd.read_csv('TADPOLE_Simplified.csv')
+df_with_gaps = calculate_temporal_gaps(
+    df, 
+    subject_col='Subject', 
+    visit_col='Visit'
+)
+
+# New columns added:
+# - visit_months: parsed month value
+# - months_to_next: gap to next visit
+# - visit_order: temporal ordering (1, 2, 3, ...)
+```
+
+The function handles:
+- Out-of-order visit records (automatically sorted by time)
+- Multiple subjects in a single dataframe
+- Missing or irregular visit patterns
+
+Implementation: `temporal_gap_processor.py:59-91`
+
+## Time Normalization Methods
+
+Four normalization strategies are available via `normalize_time_gaps()`:
+
+### 1. Logarithmic (Default)
+
+```python
+normalize_time_gaps(gaps, method='log')
+```
+
+- **Formula**: `log(1 + months/12)`
+- **Range**: Unbounded (typically 0-2 for 0-60 months)
+- **Best for**: Capturing both short-term and long-term patterns
+- **Examples**:
+  - 3 months → 0.22
+  - 6 months → 0.41
+  - 12 months → 0.69
+  - 24 months → 1.10
+  - 48 months → 1.61
+
+### 2. Min-Max Scaling
+
+```python
+normalize_time_gaps(gaps, method='minmax', max_months=60.0)
+```
+
+- **Formula**: `clip(months / max_months, 0, 1)`
+- **Range**: [0, 1]
+- **Best for**: Linear time relationships
+- **Examples** (max_months=60):
+  - 6 months → 0.10
+  - 12 months → 0.20
+  - 30 months → 0.50
+  - 60+ months → 1.00
+
+### 3. Bucket Categorization
+
+```python
+normalize_time_gaps(gaps, method='buckets')
+```
+
+- **Buckets**:
+  - 0-6 months → 0.25
+  - 6-12 months → 0.50
+  - 12-24 months → 0.75
+  - 24+ months → 1.00
+- **Best for**: Discrete time horizon modeling
+- **Use case**: When prediction difficulty varies by time range
+
+### 4. Raw Years
+
+```python
+normalize_time_gaps(gaps, method='raw')
+```
+
+- **Formula**: `months / 12`
+- **Range**: Unbounded (in years)
+- **Best for**: Interpretable units
+- **Examples**:
+  - 6 months → 0.5 years
+  - 12 months → 1.0 years
+  - 36 months → 3.0 years
+
+Implementation: `temporal_gap_processor.py:94-121`
+
+## Usage in Training
+
+Enable time-aware prediction with command-line arguments:
+
+```bash
+python main.py \
+  --use_time_features \
+  --time_normalization log \
+  --single_visit_horizon 6 \
+  --exclude_target_visit
+```
+
+### Key Arguments
+
+- `--use_time_features`: Enable temporal gap features (default: False)
+- `--time_normalization`: Normalization method - `log`, `minmax`, `buckets`, or `raw` (default: `log`)
+- `--single_visit_horizon`: Default prediction horizon in months for subjects with only one visit (default: 6)
+- `--exclude_target_visit`: Exclude the target visit from input sequences to prevent data leakage (recommended: True)
+
+See `main.py:47-50` and `dfc_main.py:50-53` for argument definitions.
+
+## Temporal Data Loading
+
+The `TemporalDataLoader` automatically handles time feature extraction:
+
+```python
+from TemporalDataLoader import TemporalDataLoader
+
+loader = TemporalDataLoader(
+    dataset=dataset,
+    indices=train_indices,
+    encoder=encoder,
+    device=device,
+    batch_size=16,
+    exclude_target_visit=True,
+    time_normalization='log',
+    single_visit_horizon=6
+)
+
+for batch in loader:
+    graph_seq = batch['graph_seq']      # (batch, seq_len, emb_dim)
+    lengths = batch['lengths']           # actual sequence lengths
+    labels = batch['labels']             # target labels
+    time_gaps = batch['time_gaps']       # normalized temporal gaps
+```
+
+The loader:
+1. Extracts visit sequences per subject
+2. Parses VISCODE to months
+3. Computes gaps to next visit (or prediction target)
+4. Applies selected normalization
+5. Pads sequences to batch max length
+
+Implementation reference: `main.py:236-249` and `dfc_main.py:340-355`
+
+## Horizon-Based Evaluation
+
+When time features are enabled, the system evaluates performance by prediction horizon:
+
+```python
+def evaluate_by_horizon(loader):
+    horizons = {
+        '0-6m': {'range': (0, 0.5)},
+        '6-12m': {'range': (0.5, 0.8)},
+        '12-24m': {'range': (0.8, 1.2)},
+        '24m+': {'range': (1.2, float('inf'))}
+    }
+    # Returns accuracy, F1, and AUC per horizon
+```
+
+Example output:
+```
+By horizon:
+0-6m: n=45, Acc=0.867, F1=0.750
+6-12m: n=38, Acc=0.816, F1=0.667
+12-24m: n=52, Acc=0.769, F1=0.600
+24m+: n=28, Acc=0.714, F1=0.571
+```
+
+See `main.py:382-463` and `dfc_main.py:462-543` for implementation.
+
+## Temporal Distribution Analysis
+
+Analyze the temporal distribution of your dataset:
+
+```python
+from temporal_gap_processor import analyze_temporal_distribution
+
+stats = analyze_temporal_distribution(
+    df, 
+    visit_col='Visit',
+    output_stats=True
+)
+
+# Output:
+# === Temporal Distribution Analysis ===
+# Total visits: 1247
+# Valid temporal visits: 1247
+# Unique timepoints: 18
+# Time range: 0 - 96 months
+# Mean: 28.4 months, Median: 24 months
+# 
+# Visit distribution by time horizon:
+#   Baseline: 312 visits
+#   0-6 months: 89 visits
+#   6-12 months: 187 visits
+#   12-24 months: 345 visits
+#   24+ months: 314 visits
+```
+
+Implementation: `temporal_gap_processor.py:149-185`
+
+## Best Practices
+
+1. **Always use `exclude_target_visit=True`** in training to prevent data leakage
+2. **Use `log` normalization** for most cases - it balances short-term and long-term predictions
+3. **Set `single_visit_horizon`** based on your dataset's typical follow-up interval (6-12 months for ADNI)
+4. **Analyze temporal distribution** before training to understand time range coverage
+5. **Compare horizon-specific metrics** to identify where the model struggles
+
+## Time Feature Integration
+
+Time features are passed to the temporal model (LSTM/GRU/RNN) as part of the sequence:
+
+```python
+logits = classifier(
+    graph_seq=graph_embeddings,
+    tab_features=None,
+    lengths=sequence_lengths
+)
+# Time gaps are implicitly encoded in the sequence ordering
+```
+
+The temporal model learns to weight recent vs. distant observations based on the prediction horizon.
+
+## Implementation Files
+
+- `temporal_gap_processor.py`: Core time processing utilities
+- `TemporalDataLoader.py`: Batch creation with time features
+- `main.py`: Static FC training with time features
+- `dfc_main.py`: Dynamic FC training with time features

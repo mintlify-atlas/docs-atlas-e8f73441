@@ -1,0 +1,378 @@
+---
+title: 'Data Preparation'
+description: 'Prepare temporal data using setup_temporal_data.py'
+---
+
+## Overview
+
+The `setup_temporal_data.py` script processes raw ADNI data to create the temporal dataset required for STGNN training. It combines acquisition dates from `TADPOLE_COMPLETE.csv` with labels from `TADPOLE_Simplified.csv` to generate `TADPOLE_TEMPORAL.csv` with temporal features.
+
+## Prerequisites
+
+### Required Input Files
+
+<CardGroup cols={2}>
+  <Card title="TADPOLE_COMPLETE.csv" icon="database">
+    Complete ADNI dataset with all visits and acquisition dates
+  </Card>
+  <Card title="TADPOLE_Simplified.csv" icon="tags">
+    Simplified ADNI dataset with subject labels
+  </Card>
+</CardGroup>
+
+Both files should be placed in the `data/` directory.
+
+### File Locations
+
+```
+data/
+├── TADPOLE_COMPLETE.csv     # Input: Complete ADNI data with dates
+├── TADPOLE_Simplified.csv   # Input: Subject labels
+└── TADPOLE_TEMPORAL.csv     # Output: Generated temporal dataset
+```
+
+## Running the Script
+
+<Steps>
+  <Step title="Navigate to project directory">
+    ```bash
+    cd /path/to/stgnn
+    ```
+  </Step>
+  
+  <Step title="Verify input files exist">
+    ```bash
+    ls -lh data/TADPOLE_COMPLETE.csv data/TADPOLE_Simplified.csv
+    ```
+    
+    The script will error if either file is missing.
+  </Step>
+  
+  <Step title="Run the preparation script">
+    ```bash
+    python setup_temporal_data.py
+    ```
+    
+    This creates `data/TADPOLE_TEMPORAL.csv` with temporal features.
+  </Step>
+  
+  <Step title="Review output statistics">
+    The script displays statistics about temporal sequences and prediction opportunities.
+  </Step>
+</Steps>
+
+## Script Workflow
+
+### 1. Data Loading
+
+From `setup_temporal_data.py:45-52`:
+```python
+print("Loading TADPOLE_COMPLETE...")
+df_complete = pd.read_csv(complete_path)
+
+print("Loading TADPOLE_Simplified for labels...")
+df_simplified = pd.read_csv(simplified_path)
+
+# Clean subject IDs (remove underscores in complete, keep in simplified)
+df_complete['Subject'] = df_complete['Subject'].str.replace('_', '', regex=False)
+```
+
+<Note>
+Subject IDs are automatically cleaned by removing underscores to ensure consistency with FC matrix filenames.
+</Note>
+
+### 2. Date Parsing
+
+From `setup_temporal_data.py:13-27`:
+```python
+def parse_date(date_str: str) -> datetime:
+    """Parse date string from TADPOLE_COMPLETE format."""
+    try:
+        # Try common formats
+        for fmt in ['%m/%d/%Y', '%m/%d/%y', '%Y-%m-%d', '%d/%m/%Y']:
+            try:
+                return datetime.strptime(str(date_str).strip(), fmt)
+            except ValueError:
+                continue
+        
+        raise ValueError(f"Cannot parse date: {date_str}")
+    except Exception as e:
+        print(f"Warning: Could not parse date '{date_str}': {e}")
+        return None
+```
+
+**Supported date formats**:
+- `MM/DD/YYYY` (e.g., `03/15/2018`)
+- `MM/DD/YY` (e.g., `03/15/18`)
+- `YYYY-MM-DD` (e.g., `2018-03-15`)
+- `DD/MM/YYYY` (e.g., `15/03/2018`)
+
+Rows with unparseable dates are automatically excluded.
+
+### 3. Temporal Sequence Creation
+
+From `setup_temporal_data.py:72-115`:
+
+<Steps>
+  <Step title="Group by subject">
+    Data is grouped by subject ID and sorted chronologically by acquisition date.
+  </Step>
+  
+  <Step title="Remove duplicates">
+    ```python
+    subject_data = subject_data.drop_duplicates(
+        subset=['Subject', 'Visit', 'Acq Date'], 
+        keep='first'
+    )
+    ```
+    Duplicates based on subject, visit, and date are removed.
+  </Step>
+  
+  <Step title="Calculate temporal features">
+    For each visit:
+    - **Months from baseline**: Time elapsed since first visit
+    - **Months to next**: Time gap until next visit
+    - **Visit order**: Chronological position (1, 2, 3, ...)
+    - **Total visits**: Number of visits for this subject
+  </Step>
+  
+  <Step title="Assign labels">
+    Subject's label is retrieved from `TADPOLE_Simplified.csv`:
+    ```python
+    subject_label = simplified_subject['Label_CS_Num'].iloc[0]
+    ```
+  </Step>
+</Steps>
+
+### 4. Temporal Feature Calculation
+
+#### Months From Baseline
+
+From `setup_temporal_data.py:88-95`:
+```python
+# Get baseline date (first visit) for this subject
+baseline_date = subject_data.iloc[0]['Acq_Date_Parsed']
+
+for idx, (_, row) in enumerate(subject_data.iterrows()):
+    # Calculate months from baseline
+    months_from_baseline = months_between_dates(
+        baseline_date, 
+        row['Acq_Date_Parsed']
+    )
+```
+
+The baseline is always the **first chronological visit** for each subject.
+
+#### Months To Next Visit
+
+From `setup_temporal_data.py:97-102`:
+```python
+# Calculate time to next visit
+if idx < len(subject_data) - 1:
+    next_date = subject_data.iloc[idx + 1]['Acq_Date_Parsed']
+    months_to_next = months_between_dates(row['Acq_Date_Parsed'], next_date)
+else:
+    months_to_next = np.nan  # Last visit has no next
+```
+
+<Info>
+The last visit for each subject has `months_to_next = NaN` since there is no subsequent visit.
+</Info>
+
+#### Date Difference Calculation
+
+From `setup_temporal_data.py:29-37`:
+```python
+def months_between_dates(date1: datetime, date2: datetime) -> float:
+    """Calculate months between two dates."""
+    if date1 is None or date2 is None:
+        return np.nan
+    
+    # Calculate total days and convert to months (approximate)
+    days_diff = (date2 - date1).days
+    months_diff = days_diff / 30.44  # Average days per month
+    return round(months_diff, 1)
+```
+
+Months are calculated using the average of 30.44 days per month.
+
+## Output Format
+
+### Generated File
+
+**Filename**: `data/TADPOLE_TEMPORAL.csv`
+
+### Columns
+
+From `setup_temporal_data.py:105-120`:
+
+| Column | Type | Description | Example |
+|--------|------|-------------|----------|
+| `Subject` | string | Subject ID (no underscores) | `123456` |
+| `Visit` | string | Visit code from original data | `bl`, `m06`, `m12` |
+| `Acq_Date` | string | Original acquisition date | `03/15/2018` |
+| `Months_From_Baseline` | float | Months since first visit | `0.0`, `6.2`, `12.5` |
+| `Months_To_Next` | float | Months until next visit | `6.2`, `6.3`, `NaN` |
+| `Label_CS_Num` | int | Cognitive stage label (0=stable, 1=converter) | `0` or `1` |
+| `Visit_Order` | int | Chronological visit number | `1`, `2`, `3`, ... |
+| `Total_Visits` | int | Total visits for this subject | `3`, `5`, `7`, ... |
+| `Age` | float | Subject age at visit (if available) | `72.5` |
+| `Sex` | string | Subject sex (if available) | `M`, `F` |
+| `Group` | string | Diagnostic group (if available) | `AD`, `MCI`, `CN` |
+
+<Warning>
+The output column is `Months_To_Next`, but the dataset loader expects `Months_To_Next_Original`. You may need to rename this column:
+
+```python
+df = pd.read_csv('data/TADPOLE_TEMPORAL.csv')
+df = df.rename(columns={'Months_To_Next': 'Months_To_Next_Original'})
+df.to_csv('data/TADPOLE_TEMPORAL.csv', index=False)
+```
+</Warning>
+
+## Output Statistics
+
+The script provides analysis of the temporal dataset:
+
+### Subject Counts
+
+From `setup_temporal_data.py:138-141`:
+```python
+visits_per_subject = df.groupby('Subject').size()
+multi_visit_subjects = visits_per_subject[visits_per_subject > 1]
+
+print(f"  Single visit: {len(visits_per_subject[visits_per_subject == 1])}")
+print(f"  Multi-visit: {len(multi_visit_subjects)}")
+```
+
+**Example output**:
+```
+Subjects available:
+  Single visit: 45
+  Multi-visit: 123
+  Total prediction pairs: 287
+```
+
+### Prediction Horizons
+
+From `setup_temporal_data.py:144-153`:
+```python
+# Define prediction horizon bins
+bins = [0, 6, 12, 24, float('inf')]
+labels = ['0-6m', '6-12m', '12-24m', '24m+']
+
+print(f"\nPrediction horizons:")
+for i in range(len(bins)-1):
+    count = len(valid_gaps[(valid_gaps >= bins[i]) & (valid_gaps < bins[i+1])])
+    print(f"  {labels[i]:8s}: {count:3d} prediction opportunities")
+```
+
+**Example output**:
+```
+Prediction horizons:
+  0-6m    :  87 prediction opportunities
+  6-12m   : 112 prediction opportunities
+  12-24m  :  65 prediction opportunities
+  24m+    :  23 prediction opportunities
+```
+
+These statistics show how many visit pairs exist for different prediction time windows.
+
+## Complete Example Run
+
+```bash
+$ python setup_temporal_data.py
+
+SETTING UP TEMPORAL DATA FOR TIME-AWARE PREDICTION
+============================================================
+
+============================================================
+CREATING TEMPORAL DATASET
+============================================================
+Loading TADPOLE_COMPLETE...
+Loading TADPOLE_Simplified for labels...
+TADPOLE_COMPLETE: 12741 rows, 1737 subjects
+TADPOLE_Simplified: 1737 rows, 1737 subjects
+Processing data: 12741 rows, 1737 subjects
+Parsing acquisition dates...
+Data with valid dates: 12689 rows
+Creating temporal sequences...
+Temporal dataset created: 12689 rows, 1737 subjects
+
+============================================================
+PREDICTION PAIRS ANALYSIS
+============================================================
+Subjects available:
+  Single visit: 1234
+  Multi-visit: 503
+  Total prediction pairs: 1456
+
+Prediction horizons:
+  0-6m    : 245 prediction opportunities
+  6-12m   : 578 prediction opportunities
+  12-24m  : 412 prediction opportunities
+  24m+    : 221 prediction opportunities
+
+SAVING RESULTS...
+File created:
+   data/TADPOLE_TEMPORAL.csv
+
+Ready for time-aware training!
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Input file not found">
+    **Error**: `Error: data/TADPOLE_COMPLETE.csv not found!`
+    
+    **Solution**: Ensure both input CSV files are in the `data/` directory:
+    ```bash
+    ls data/TADPOLE_COMPLETE.csv data/TADPOLE_Simplified.csv
+    ```
+  </Accordion>
+  
+  <Accordion title="Date parsing warnings">
+    **Warning**: `Warning: Could not parse date '...': ...`
+    
+    **Impact**: Rows with unparseable dates are excluded from the temporal dataset.
+    
+    **Solution**: Check date format in `TADPOLE_COMPLETE.csv`. Supported formats are listed above.
+  </Accordion>
+  
+  <Accordion title="Missing subjects in output">
+    **Issue**: Fewer subjects in output than expected
+    
+    **Possible causes**:
+    1. Subject not in `TADPOLE_Simplified.csv` (no label available)
+    2. No valid acquisition dates for subject
+    3. Subject ID format mismatch
+    
+    **Solution**: Check that subject IDs match between the two input files.
+  </Accordion>
+  
+  <Accordion title="Column name mismatch">
+    **Issue**: Dataset loader expects `Months_To_Next_Original` but script creates `Months_To_Next`
+    
+    **Solution**: Rename the column after generation:
+    ```python
+    import pandas as pd
+    df = pd.read_csv('data/TADPOLE_TEMPORAL.csv')
+    df = df.rename(columns={'Months_To_Next': 'Months_To_Next_Original'})
+    df.to_csv('data/TADPOLE_TEMPORAL.csv', index=False)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+After generating `TADPOLE_TEMPORAL.csv`:
+
+<CardGroup cols={2}>
+  <Card title="Prepare FC Matrices" icon="brain" href="/data/adni-dataset">
+    Organize functional connectivity matrices in the required format
+  </Card>
+  <Card title="Start Training" icon="play" href="/quickstart">
+    Begin training STGNN model with temporal data
+  </Card>
+</CardGroup>

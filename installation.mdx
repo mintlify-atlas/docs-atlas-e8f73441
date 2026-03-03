@@ -1,0 +1,204 @@
+---
+title: Installation
+description: Set up your environment and install dependencies for STGNN
+---
+
+# Installation
+
+Get STGNN up and running in your environment by following these installation steps.
+
+## System requirements
+
+Before installing STGNN, ensure your system meets these requirements:
+
+- **Python**: 3.8 or higher
+- **CUDA**: 11.0 or higher (for GPU acceleration)
+- **Memory**: At least 16GB RAM recommended
+- **Storage**: Sufficient space for fMRI data (varies by dataset size)
+
+<Note>
+GPU acceleration is strongly recommended for training. CPU-only training is possible but will be significantly slower.
+</Note>
+
+## Dependencies
+
+STGNN requires the following key packages:
+
+### Core dependencies
+
+- **PyTorch** (≥2.0.0): Deep learning framework
+- **PyTorch Geometric** (≥2.3.0): Graph neural network library
+- **torch-scatter** (≥2.1.0): Scatter operations for PyTorch Geometric
+
+### Data processing
+
+- **NumPy** (≥1.21.0): Numerical computing
+- **pandas** (≥1.5.0): Data manipulation
+- **SciPy** (≥1.9.0): Scientific computing
+
+### Machine learning
+
+- **scikit-learn** (≥1.2.0): ML utilities and metrics
+- **Optuna** (≥3.4.0): Hyperparameter optimization
+- **optuna-dashboard** (≥0.15.0): Optuna visualization dashboard
+
+### Visualization
+
+- **matplotlib** (≥3.5.0): Plotting library
+- **plotly** (≥5.17.0): Interactive visualizations
+- **kaleido** (≥0.2.1): Static image export for plotly
+
+### Utilities
+
+- **tqdm** (≥4.64.0): Progress bars
+
+## Installation steps
+
+<Steps>
+  <Step title="Clone the repository">
+    First, clone the STGNN repository to your local machine:
+    
+    ```bash
+    git clone <repository-url>
+    cd stgnn
+    ```
+  </Step>
+  
+  <Step title="Create a virtual environment (optional but recommended)">
+    Create an isolated Python environment for the project:
+    
+    <CodeGroup>
+    ```bash conda
+    conda create -n stgnn python=3.9
+    conda activate stgnn
+    ```
+    
+    ```bash venv
+    python -m venv stgnn-env
+    source stgnn-env/bin/activate  # On Windows: stgnn-env\Scripts\activate
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Install PyTorch with CUDA support">
+    Install PyTorch with CUDA support for your system. Visit [pytorch.org](https://pytorch.org) to get the appropriate command for your CUDA version.
+    
+    Example for CUDA 11.8:
+    
+    ```bash
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    ```
+    
+    For CPU-only installation:
+    
+    ```bash
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    ```
+  </Step>
+  
+  <Step title="Install PyTorch Geometric">
+    Install PyTorch Geometric and its dependencies:
+    
+    ```bash
+    pip install torch-geometric torch-scatter
+    ```
+    
+    <Tip>
+    If you encounter issues, refer to the [PyTorch Geometric installation guide](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html) for platform-specific instructions.
+    </Tip>
+  </Step>
+  
+  <Step title="Install remaining dependencies">
+    Install all other required packages from the requirements file:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    This installs all dependencies listed in the requirements.txt file:
+    
+    ```text requirements.txt
+    torch>=2.0.0
+    torch-geometric>=2.3.0
+    torch-scatter>=2.1.0
+    numpy>=1.21.0
+    pandas>=1.5.0
+    scipy>=1.9.0
+    scikit-learn>=1.2.0
+    matplotlib>=3.5.0
+    tqdm>=4.64.0
+    optuna>=3.4.0
+    optuna-dashboard>=0.15.0
+    plotly>=5.17.0
+    kaleido>=0.2.1
+    ```
+  </Step>
+  
+  <Step title="Verify installation">
+    Verify that all packages are installed correctly:
+    
+    ```python
+    import torch
+    import torch_geometric
+    import numpy as np
+    import pandas as pd
+    
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"PyTorch Geometric version: {torch_geometric.__version__}")
+    ```
+    
+    Expected output:
+    ```
+    PyTorch version: 2.0.0 (or higher)
+    CUDA available: True
+    PyTorch Geometric version: 2.3.0 (or higher)
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### CUDA compatibility issues
+
+If you encounter CUDA-related errors, ensure that:
+
+1. Your NVIDIA driver is up to date
+2. The PyTorch CUDA version matches your installed CUDA toolkit
+3. `torch.cuda.is_available()` returns `True`
+
+```bash
+# Check CUDA version
+nvidia-smi
+
+# Check PyTorch CUDA version
+python -c "import torch; print(torch.version.cuda)"
+```
+
+### PyTorch Geometric installation issues
+
+If PyTorch Geometric installation fails:
+
+1. Ensure PyTorch is installed first
+2. Check that your PyTorch version is compatible with PyTorch Geometric
+3. Try installing from conda-forge:
+
+```bash
+conda install pytorch-geometric -c pytorch -c conda-forge
+```
+
+### Memory errors
+
+If you encounter out-of-memory errors:
+
+- Reduce the batch size using `--batch_size` parameter
+- Reduce GNN hidden dimensions using `--gnn_hidden_dim`
+- Use a machine with more RAM or GPU memory
+
+<Warning>
+Some dependencies like `torch-scatter` require compilation and may take several minutes to install. Be patient during the installation process.
+</Warning>
+
+## Next steps
+
+Once installation is complete, proceed to the [Quick start guide](/quickstart) to set up your data and run your first training.

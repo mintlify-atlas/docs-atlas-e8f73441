@@ -1,0 +1,337 @@
+---
+title: GraphConverter
+description: Utilities for converting functional connectivity matrices to PyTorch Geometric graphs
+---
+
+## Overview
+
+The `GraphConverter` module provides functions to convert functional connectivity (FC) matrices from fMRI data into graph representations compatible with PyTorch Geometric. It handles loading, preprocessing, and structuring neuroimaging data for graph neural network training.
+
+## Functions
+
+### fc_to_graph
+
+```python
+def fc_to_graph(
+    fc_matrix,
+    node_features=None,
+    threshold=0.2,
+    subj_id=None
+) -> Data
+```
+
+Converts a single functional connectivity matrix into a PyTorch Geometric graph.
+
+<ParamField path="fc_matrix" type="numpy.ndarray">
+  Functional connectivity matrix of shape `(N, N)` where N is the number of brain regions.
+</ParamField>
+
+<ParamField path="node_features" type="numpy.ndarray" default="None">
+  Optional node feature matrix of shape `(N, num_features)`. If None, uses identity matrix.
+</ParamField>
+
+<ParamField path="threshold" type="float" default="0.2">
+  Minimum absolute correlation value to create an edge. Weak connections below this are removed.
+</ParamField>
+
+<ParamField path="subj_id" type="str" default="None">
+  Optional subject identifier to attach to the graph.
+</ParamField>
+
+<ResponseField name="data" type="torch_geometric.data.Data">
+  PyTorch Geometric Data object containing:
+  - `x`: Node features (N × num_features)
+  - `edge_index`: Edge connectivity (2 × num_edges)
+  - `edge_attr`: Edge weights (num_edges × 1)
+  - `subj_id`: Subject identifier (if provided)
+</ResponseField>
+
+### load_fc_graph_sequences_walk
+
+```python
+def load_fc_graph_sequences_walk(
+    base_path,
+    threshold=0.2,
+    var_name='fc_matrix'
+) -> Dict[str, List[Data]]
+```
+
+Recursively loads all FC matrix files and converts them into sequences of graph objects per subject.
+
+<ParamField path="base_path" type="str">
+  Root directory path containing FC matrix .npz files.
+</ParamField>
+
+<ParamField path="threshold" type="float" default="0.2">
+  Edge threshold for graph construction.
+</ParamField>
+
+<ParamField path="var_name" type="str" default="'fc_matrix'">
+  Variable name to extract from .npz files (e.g., 'fc_matrix', 'arr_0').
+</ParamField>
+
+<ResponseField name="fc_graphs" type="Dict[str, List[Data]]">
+  Dictionary mapping subject IDs to lists of graph Data objects, one per timepoint.
+</ResponseField>
+
+### load_subject_labels
+
+```python
+def load_subject_labels(
+    label_csv_path,
+    label_col='Label_CS_Num'
+) -> Dict[str, int]
+```
+
+Loads subject labels from a CSV file.
+
+<ParamField path="label_csv_path" type="str">
+  Path to CSV file containing subject IDs and labels.
+</ParamField>
+
+<ParamField path="label_col" type="str" default="'Label_CS_Num'">
+  Column name containing the label values.
+</ParamField>
+
+<ResponseField name="label_dict" type="Dict[str, int]">
+  Dictionary mapping subject IDs to label values.
+</ResponseField>
+
+### createPadded
+
+```python
+def createPadded(fc_graphs) -> Dict[str, List[Data]]
+```
+
+Pads graph sequences to the same length across all subjects by adding empty padding graphs.
+
+<ParamField path="fc_graphs" type="Dict[str, List[Data]]">
+  Dictionary of subject ID to list of graphs.
+</ParamField>
+
+<ResponseField name="padded_graphs" type="Dict[str, List[Data]]">
+  Dictionary with all sequences padded to maximum length.
+</ResponseField>
+
+### create_padding_graph
+
+```python
+def create_padding_graph(
+    num_nodes,
+    label,
+    subj_id=None
+) -> Data
+```
+
+Creates an empty padding graph with no edges.
+
+<ParamField path="num_nodes" type="int">
+  Number of nodes in the graph.
+</ParamField>
+
+<ParamField path="label" type="int">
+  Label to assign to the padding graph.
+</ParamField>
+
+<ParamField path="subj_id" type="str" default="None">
+  Optional subject identifier.
+</ParamField>
+
+<ResponseField name="data" type="Data">
+  Empty graph with zero features and no edges.
+</ResponseField>
+
+### summarize_patient_graph_dims
+
+```python
+def summarize_patient_graph_dims(
+    padded_graphs
+) -> pd.DataFrame
+```
+
+Generates a summary DataFrame of graph dimensions across all subjects.
+
+<ParamField path="padded_graphs" type="Dict[str, List[Data]]">
+  Dictionary of padded graph sequences.
+</ParamField>
+
+<ResponseField name="summary" type="pd.DataFrame">
+  DataFrame with columns:
+  - `subject_id`: Subject identifier
+  - `num_graphs`: Number of graphs in sequence
+  - `avg_nodes`: Average number of nodes
+  - `avg_features`: Average feature dimension
+  - `avg_edges`: Average number of edges
+  - `label`: Subject label
+</ResponseField>
+
+## Usage Examples
+
+### Basic Graph Conversion
+
+```python
+import numpy as np
+from GraphConverter import fc_to_graph
+
+# Load or generate FC matrix
+fc_matrix = np.random.randn(100, 100)
+fc_matrix = (fc_matrix + fc_matrix.T) / 2  # Make symmetric
+
+# Convert to graph
+graph = fc_to_graph(
+    fc_matrix,
+    threshold=0.2,
+    subj_id='sub-001'
+)
+
+print(f"Nodes: {graph.x.shape[0]}")
+print(f"Edges: {graph.edge_index.shape[1]}")
+print(f"Features: {graph.x.shape[1]}")
+```
+
+### Loading Complete Dataset
+
+```python
+from GraphConverter import (
+    load_fc_graph_sequences_walk,
+    load_subject_labels,
+    createPadded
+)
+import torch
+
+# Load FC matrices
+base_path = "data/FC_Matrices"
+fc_graphs = load_fc_graph_sequences_walk(
+    base_path,
+    threshold=0.2,
+    var_name="fc_matrix"
+)
+
+print(f"Loaded {len(fc_graphs)} subjects")
+
+# Load labels
+label_dict = load_subject_labels(
+    "data/TADPOLE_Simplified.csv",
+    label_col='Label_CS_Num'
+)
+
+# Assign labels to graphs
+for subj_id in fc_graphs:
+    clean_id = subj_id.replace('_', '')
+    label = label_dict.get(clean_id, 0)
+    for graph in fc_graphs[subj_id]:
+        graph.y = torch.tensor([label], dtype=torch.long)
+
+# Pad sequences
+padded_graphs = createPadded(fc_graphs)
+```
+
+### Complete Pipeline from main.py
+
+```python
+from GraphConverter import (
+    load_fc_graph_sequences_walk,
+    load_subject_labels,
+    createPadded,
+    summarize_patient_graph_dims
+)
+import pandas as pd
+import torch
+
+base_path = "data/Updated FC Matrices"
+label_csv_path = "data/TADPOLE_Simplified.csv"
+
+# Load labels
+label_dict = load_subject_labels(label_csv_path)
+
+# Load and convert FC matrices to graphs
+fc_graphs = load_fc_graph_sequences_walk(
+    base_path,
+    threshold=0.2,
+    var_name="arr_0"
+)
+
+# Add labels to graphs
+for subj_id in fc_graphs:
+    clean_id = subj_id.replace('_', '')
+    label = label_dict.get(clean_id, 0)
+    for graph in fc_graphs[subj_id]:
+        graph.y = torch.tensor([label], dtype=torch.long)
+
+print(f"Loaded {len(fc_graphs)} subjects.")
+
+# Pad to equal length
+padded_graphs = createPadded(fc_graphs)
+
+# Generate summary statistics
+df_summary = summarize_patient_graph_dims(padded_graphs)
+print(df_summary.head())
+df_summary.to_csv("data/graph_summary.csv", index=False)
+```
+
+### Custom Node Features
+
+```python
+from GraphConverter import fc_to_graph
+import numpy as np
+
+# Create custom node features (e.g., regional volumes)
+num_regions = 100
+node_features = np.random.randn(num_regions, 10)
+
+# Convert with custom features
+graph = fc_to_graph(
+    fc_matrix,
+    node_features=node_features,
+    threshold=0.15
+)
+
+print(f"Feature dimension: {graph.x.shape[1]}")  # 10
+```
+
+## Data Format
+
+### Expected FC Matrix Format
+
+FC matrices should be stored as `.npz` files with naming pattern:
+```
+sub-{subject_id}_fc_matrix.npz
+```
+
+Each file should contain:
+- Shape: `(T, N, N)` where T is number of timepoints, N is number of regions
+- Symmetric correlation matrices
+- Values typically in range [-1, 1]
+
+### Graph Structure
+
+Each graph contains:
+```python
+Data(
+    x=[100, 100],          # Node features (identity matrix by default)
+    edge_index=[2, E],     # Edge connectivity
+    edge_attr=[E, 1],      # Edge weights (correlations)
+    y=[1],                 # Subject label
+    subj_id='sub-001'      # Subject identifier
+)
+```
+
+## Best Practices
+
+<Tip>
+Use a threshold of 0.2 for typical fMRI data to balance graph density with noise reduction.
+</Tip>
+
+<Warning>
+Always symmetrize your FC matrices before conversion: `fc_matrix = (fc_matrix + fc_matrix.T) / 2`
+</Warning>
+
+<Note>
+Padding graphs have zero features and no edges. They are automatically masked during temporal processing.
+</Note>
+
+## Related
+
+- [FC_ADNIDataset](/api/fc-adni-dataset) - Dataset class using these utilities
+- [Temporal Data Loader](/api/temporal-dataloader) - Loading graph sequences
+- [Data Preparation](/data/data-preparation) - Complete preprocessing pipeline

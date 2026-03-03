@@ -1,0 +1,615 @@
+---
+title: 'Graph Neural Networks'
+description: 'Understanding GNN layer types (GraphSAGE, GCN, GAT) and their role in spatial feature extraction'
+---
+
+## Overview
+
+Graph Neural Networks (GNNs) are the spatial encoder in the STGNN architecture, transforming brain connectivity graphs into fixed-dimensional embeddings that capture connectivity patterns.
+
+## Supported Layer Types
+
+The system supports three state-of-the-art GNN architectures, selectable via `--layer_type`:
+
+<CardGroup cols={3}>
+  <Card title="GraphSAGE" icon="diagram-project">
+    **Default choice**
+    
+    Graph Sample and Aggregate - efficient neighbor sampling and aggregation
+  </Card>
+  <Card title="GCN" icon="network-wired">
+    Graph Convolutional Network - spectral-based convolution operation
+  </Card>
+  <Card title="GAT" icon="eye">
+    Graph Attention Network - learned attention weights for neighbors
+  </Card>
+</CardGroup>
+
+## GraphSAGE (Default)
+
+### Architecture
+
+```python
+from torch_geometric.nn import SAGEConv
+
+if layer_type == "GraphSAGE":
+    conv = SAGEConv(in_dim, out_dim)
+```
+
+**Code reference**: `model.py:60-61`
+
+### How It Works
+
+<Steps>
+  <Step title="Neighborhood Sampling">
+    For each node, sample a fixed number of neighbors (or use all neighbors)
+  </Step>
+  
+  <Step title="Aggregation">
+    Aggregate neighbor features using mean pooling:
+    
+    $$
+    h_{\mathcal{N}(v)}^{(l)} = \text{MEAN}(\{h_u^{(l-1)} : u \in \mathcal{N}(v)\})
+    $$
+  </Step>
+  
+  <Step title="Concatenation & Transformation">
+    Combine node's own features with aggregated neighborhood:
+    
+    $$
+    h_v^{(l)} = \sigma(W \cdot [h_v^{(l-1)} \| h_{\mathcal{N}(v)}^{(l)}])
+    $$
+  </Step>
+</Steps>
+
+### Advantages
+
+<AccordionGroup>
+  <Accordion title="Computational Efficiency">
+    Mean aggregation is fast and memory-efficient, suitable for large graphs with many nodes (e.g., 100-400 brain regions).
+  </Accordion>
+  
+  <Accordion title="Scalability">
+    Can handle varying graph sizes and structures without modification. Works well with different brain parcellation schemes.
+  </Accordion>
+  
+  <Accordion title="Inductive Learning">
+    Learns a function to generate embeddings rather than embedding lookup, allowing generalization to unseen graph structures.
+  </Accordion>
+</AccordionGroup>
+
+### When to Use
+
+<Check>
+  **Best for**: Large brain graphs (200+ regions), consistent performance, default choice for most applications
+</Check>
+
+## Graph Convolutional Network (GCN)
+
+### Architecture
+
+```python
+from torch_geometric.nn import GCNConv
+
+if layer_type == "GCN":
+    conv = GCNConv(in_dim, out_dim)
+```
+
+**Code reference**: `model.py:56-57`
+
+### How It Works
+
+<Steps>
+  <Step title="Normalized Aggregation">
+    Aggregate with symmetric normalization:
+    
+    $$
+    h_v^{(l)} = \sigma\left(\sum_{u \in \mathcal{N}(v) \cup \{v\}} \frac{1}{\sqrt{d_u d_v}} W h_u^{(l-1)}\right)
+    $$
+    
+    where $d_u$ and $d_v$ are node degrees.
+  </Step>
+  
+  <Step title="Spectral Foundation">
+    Based on spectral graph theory - approximates graph convolution in the frequency domain.
+  </Step>
+</Steps>
+
+### Advantages
+
+<AccordionGroup>
+  <Accordion title="Theoretical Foundation">
+    Strong mathematical grounding in spectral graph theory, with provable properties.
+  </Accordion>
+  
+  <Accordion title="Degree Normalization">
+    Automatic handling of varying node degrees - high-degree nodes don't dominate.
+  </Accordion>
+  
+  <Accordion title="Simplicity">
+    Clean, elegant formulation with fewer hyperparameters.
+  </Accordion>
+</AccordionGroup>
+
+### When to Use
+
+<Check>
+  **Best for**: Well-understood theoretical properties needed, simpler architecture preferred, smaller graphs (< 200 regions)
+</Check>
+
+## Graph Attention Network (GAT)
+
+### Architecture
+
+```python
+from torch_geometric.nn import GATConv
+
+if layer_type == "GAT":
+    conv = GATConv(in_dim, out_dim)
+```
+
+**Code reference**: `model.py:58-59`
+
+### How It Works
+
+<Steps>
+  <Step title="Attention Coefficient Computation">
+    Learn importance of each neighbor via attention mechanism:
+    
+    $$
+    e_{vu} = \text{LeakyReLU}(a^T [W h_v \| W h_u])
+    $$
+  </Step>
+  
+  <Step title="Softmax Normalization">
+    Normalize attention across neighbors:
+    
+    $$
+    \alpha_{vu} = \frac{\exp(e_{vu})}{\sum_{k \in \mathcal{N}(v)} \exp(e_{vk})}
+    $$
+  </Step>
+  
+  <Step title="Weighted Aggregation">
+    Aggregate using learned attention weights:
+    
+    $$
+    h_v^{(l)} = \sigma\left(\sum_{u \in \mathcal{N}(v)} \alpha_{vu} W h_u^{(l-1)}\right)
+    $$
+  </Step>
+</Steps>
+
+### Advantages
+
+<AccordionGroup>
+  <Accordion title="Adaptive Importance">
+    Learns which connections matter most for each node, rather than treating all neighbors equally.
+  </Accordion>
+  
+  <Accordion title="Interpretability">
+    Attention weights can be visualized to understand which brain connections the model focuses on.
+  </Accordion>
+  
+  <Accordion title="Multi-Head Attention">
+    Can learn multiple attention patterns simultaneously (though default uses single head).
+  </Accordion>
+</AccordionGroup>
+
+### When to Use
+
+<Check>
+  **Best for**: Interpretability needed, heterogeneous connectivity importance, when some edges are more critical than others
+</Check>
+
+<Warning>
+  **Computational Cost**: Higher memory and computation than GCN/GraphSAGE due to attention mechanism. May be slower for very large graphs.
+</Warning>
+
+## Layer Configuration
+
+### Dynamic Layer Construction
+
+Layers are built dynamically based on configuration:
+
+```python
+for i in range(num_layers):
+    if i == 0:
+        in_dim = input_dim      # First layer: input dimension
+        out_dim = hidden_dim
+    elif i == num_layers - 1:
+        in_dim = hidden_dim
+        out_dim = output_dim    # Last layer: output dimension
+    else:
+        in_dim = hidden_dim
+        out_dim = hidden_dim    # Middle layers: hidden dimension
+    
+    # Create layer based on type
+    if layer_type == "GCN":
+        conv = GCNConv(in_dim, out_dim)
+    elif layer_type == "GAT":
+        conv = GATConv(in_dim, out_dim)
+    elif layer_type == "GraphSAGE":
+        conv = SAGEConv(in_dim, out_dim)
+    
+    self.convs.append(conv)
+    self.gns.append(GraphNorm(out_dim))
+```
+
+**Code reference**: `model.py:41-66`
+
+### Default Configuration
+
+```bash
+--layer_type GraphSAGE
+--gnn_num_layers 2
+--gnn_hidden_dim 256
+--gnn_activation elu
+```
+
+<Info>
+  This creates a 2-layer GraphSAGE network: `input_dim → 256 → 256` (before pooling)
+</Info>
+
+## Layer Operations
+
+Each GNN layer includes a standardized processing pipeline:
+
+```python
+for i in range(self.num_layers):
+    # 1. Graph convolution (message passing)
+    x = self.convs[i](x, edge_index)
+    
+    # 2. Graph normalization (batch-wise)
+    x = self.gns[i](x, batch)
+    
+    # 3. Activation function
+    x = self.activation_fn(x)
+    
+    # 4. Dropout for regularization
+    x = self.dropout(x)
+    
+    # 5. Optional: TopK pooling (hierarchical coarsening)
+    if self.use_topk_pooling:
+        x, edge_index, _, batch, perm, score = self.topk_pools[i](
+            x, edge_index, batch=batch
+        )
+```
+
+**Code reference**: `model.py:139-146`
+
+### Component Details
+
+<Tabs>
+  <Tab title="Graph Normalization">
+    ```python
+    from torch_geometric.nn import GraphNorm
+    
+    self.gns.append(GraphNorm(out_dim))
+    x = self.gns[i](x, batch)
+    ```
+    
+    **Purpose**: Normalizes node features within each graph (like BatchNorm but graph-aware)
+    
+    **Benefits**:
+    - Stabilizes training
+    - Reduces internal covariate shift
+    - Allows higher learning rates
+    
+    **Code reference**: `model.py:66`
+  </Tab>
+  
+  <Tab title="Activation Functions">
+    ```python
+    activation_map = {
+        'relu': F.relu,
+        'leaky_relu': F.leaky_relu,
+        'elu': F.elu,
+        'gelu': F.gelu
+    }
+    self.activation_fn = activation_map.get(activation, F.relu)
+    ```
+    
+    **Options** (via `--gnn_activation`):
+    - **ReLU**: Fast, standard choice
+    - **LeakyReLU**: Prevents dying neurons
+    - **ELU**: Smooth, faster convergence (default)
+    - **GELU**: Used in transformers, smooth approximation
+    
+    **Code reference**: `model.py:28-34`
+  </Tab>
+  
+  <Tab title="Dropout">
+    ```python
+    self.dropout = nn.Dropout(p=dropout)  # default p=0.5
+    x = self.dropout(x)
+    ```
+    
+    **Purpose**: Regularization to prevent overfitting
+    
+    **Default**: 50% dropout rate
+    
+    **When**: Applied after each activation function
+    
+    **Code reference**: `model.py:69, 143`
+  </Tab>
+</Tabs>
+
+## TopK Pooling
+
+Hierarchical graph coarsening that retains the most important nodes:
+
+```python
+from torch_geometric.nn import TopKPooling
+
+if use_topk_pooling:
+    # Ensure minimum 30% retention
+    safe_ratio = max(0.3, min(1.0, topk_ratio))
+    
+    for i in range(num_layers):
+        pool_dim = output_dim if i == num_layers - 1 else hidden_dim
+        self.topk_pools.append(
+            TopKPooling(pool_dim, ratio=safe_ratio, min_score=None)
+        )
+```
+
+**Code reference**: `model.py:72-86`
+
+### How It Works
+
+<Steps>
+  <Step title="Score Computation">
+    Each node receives an importance score:
+    
+    $$
+    s_v = \frac{x_v \cdot p}{\|p\|}
+    $$
+    
+    where $p$ is a learned projection vector.
+  </Step>
+  
+  <Step title="Top-K Selection">
+    Keep only the top $k = \lceil \text{ratio} \times N \rceil$ nodes with highest scores.
+  </Step>
+  
+  <Step title="Graph Reconstruction">
+    Update edge index to only include edges between retained nodes.
+  </Step>
+</Steps>
+
+### Benefits
+
+<AccordionGroup>
+  <Accordion title="Dimensionality Reduction">
+    Progressively reduces graph size through layers, focusing computation on important regions.
+  </Accordion>
+  
+  <Accordion title="Hierarchical Abstraction">
+    Later layers operate on coarser graphs, capturing higher-level patterns.
+  </Accordion>
+  
+  <Accordion title="Attention-like Mechanism">
+    Learns which brain regions are most diagnostically relevant.
+  </Accordion>
+</AccordionGroup>
+
+### Safety Mechanism
+
+<Warning>
+  **Minimum Retention**: The system enforces at least 30% node retention to prevent empty graphs, overriding user-specified `topk_ratio` if needed (`model.py:74`).
+</Warning>
+
+```python
+safe_ratio = max(0.3, min(1.0, topk_ratio))
+print(f"TopK pooling initialized with safe ratio: {safe_ratio} (minimum 30%)")
+```
+
+## Global Pooling
+
+After all GNN layers, graph-level features are extracted via dual pooling:
+
+```python
+from torch_geometric.nn import global_mean_pool, global_max_pool
+
+# Aggregate all node features to graph-level representation
+x_mean = global_mean_pool(x, batch)  # Average: [B, out_dim]
+x_max = global_max_pool(x, batch)    # Maximum: [B, out_dim]
+
+# Concatenate for richer representation
+x = torch.cat([x_mean, x_max], dim=1)  # [B, out_dim * 2]
+```
+
+**Code reference**: `model.py:149-153, 167-169`
+
+### Why Dual Pooling?
+
+<CardGroup cols={2}>
+  <Card title="Mean Pooling" icon="chart-simple">
+    **Captures**: Average connectivity patterns across all regions
+    
+    **Pros**: Smooth, robust to outliers
+    
+    **Represents**: Overall brain state
+  </Card>
+  
+  <Card title="Max Pooling" icon="arrow-up">
+    **Captures**: Peak activations and extreme values
+    
+    **Pros**: Sensitive to salient features
+    
+    **Represents**: Most abnormal regions
+  </Card>
+</CardGroup>
+
+<Info>
+  **Output Dimension**: With `output_dim=256`, dual pooling produces 512D embeddings (256 from mean + 256 from max).
+</Info>
+
+## Comparative Performance
+
+### Layer Type Comparison
+
+| Layer Type | Speed | Memory | Accuracy | Interpretability | Best Use Case |
+|------------|-------|--------|----------|------------------|---------------|
+| **GraphSAGE** | Fast | Low | High | Medium | Default, large graphs |
+| **GCN** | Fast | Low | High | Low | Simpler architecture, theoretical |
+| **GAT** | Slow | High | Highest | High | When interpretability matters |
+
+### Depth Considerations
+
+<Tabs>
+  <Tab title="2 Layers (Default)">
+    **Receptive Field**: 2-hop neighborhood
+    
+    **Pros**:
+    - Fast training
+    - Less overfitting risk
+    - Sufficient for most brain parcellation schemes
+    
+    **Cons**:
+    - Limited long-range connectivity modeling
+  </Tab>
+  
+  <Tab title="3 Layers">
+    **Receptive Field**: 3-hop neighborhood
+    
+    **Pros**:
+    - Captures network-level organization
+    - Better for larger graphs (300+ regions)
+    
+    **Cons**:
+    - Slower training
+    - More parameters
+  </Tab>
+  
+  <Tab title="4-5 Layers">
+    **Receptive Field**: 4-5 hop neighborhood
+    
+    **Pros**:
+    - Maximum expressiveness
+    - Whole-brain connectivity patterns
+    
+    **Cons**:
+    - Over-smoothing risk (nodes become too similar)
+    - Overfitting on small datasets
+    - Slower training
+  </Tab>
+</Tabs>
+
+## Practical Configuration Guide
+
+### Quick Start
+
+```bash
+# Default configuration (recommended)
+python main.py \
+  --layer_type GraphSAGE \
+  --gnn_num_layers 2 \
+  --gnn_hidden_dim 256 \
+  --gnn_activation elu \
+  --use_topk_pooling \
+  --topk_ratio 0.3
+```
+
+### For Interpretability
+
+```bash
+# Use GAT with attention weights
+python main.py \
+  --layer_type GAT \
+  --gnn_num_layers 2 \
+  --gnn_hidden_dim 128  # Reduce dim to manage memory
+```
+
+### For Large Graphs (400+ regions)
+
+```bash
+# Deeper network with aggressive pooling
+python main.py \
+  --layer_type GraphSAGE \
+  --gnn_num_layers 3 \
+  --gnn_hidden_dim 256 \
+  --use_topk_pooling \
+  --topk_ratio 0.2  # Keep only 20% of nodes
+```
+
+### For Small Datasets
+
+```bash
+# Simpler network to prevent overfitting
+python main.py \
+  --layer_type GCN \
+  --gnn_num_layers 2 \
+  --gnn_hidden_dim 128 \
+  --dropout 0.6  # Higher dropout
+```
+
+## Debugging and Visualization
+
+<Tip>
+  **Check Layer Dimensions**: Add print statements to verify tensor shapes through the network:
+  
+  ```python
+  for i in range(self.num_layers):
+      print(f"Layer {i}: x.shape = {x.shape}, edges = {edge_index.shape[1]}")
+      x = self.convs[i](x, edge_index)
+  ```
+</Tip>
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="Empty Graphs After TopK Pooling">
+    **Symptom**: Runtime error about empty batches
+    
+    **Cause**: `topk_ratio` too aggressive for small graphs
+    
+    **Solution**: Increase `topk_ratio` or disable TopK pooling
+    
+    ```bash
+    --topk_ratio 0.5  # Keep 50% of nodes
+    # OR
+    --use_topk_pooling False
+    ```
+  </Accordion>
+  
+  <Accordion title="Out of Memory (OOM)">
+    **Symptom**: CUDA out of memory error
+    
+    **Cause**: GAT layers with large graphs, or too large hidden_dim
+    
+    **Solution**: Reduce dimensions or use GraphSAGE
+    
+    ```bash
+    --layer_type GraphSAGE  # More memory efficient
+    --gnn_hidden_dim 128    # Smaller dimension
+    --batch_size 8          # Smaller batches
+    ```
+  </Accordion>
+  
+  <Accordion title="Poor Convergence">
+    **Symptom**: Loss plateaus early, low accuracy
+    
+    **Cause**: Network too shallow or too deep, wrong activation
+    
+    **Solution**: Tune architecture hyperparameters
+    
+    ```bash
+    --gnn_num_layers 3      # Try different depths
+    --gnn_activation elu    # ELU often works better than ReLU
+    --lr 0.001              # Adjust learning rate
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Temporal Modeling" icon="forward" href="/concepts/temporal-prediction">
+    How GNN embeddings are processed temporally
+  </Card>
+  <Card title="Architecture Overview" icon="sitemap" href="/concepts/architecture">
+    Complete system pipeline
+  </Card>
+  <Card title="Spatiotemporal Integration" icon="link" href="/concepts/spatiotemporal-modeling">
+    Combining spatial and temporal features
+  </Card>
+</CardGroup>

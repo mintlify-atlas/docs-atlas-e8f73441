@@ -1,0 +1,217 @@
+---
+title: 'Conversion Analysis'
+description: 'Detailed accuracy breakdown by conversion type and baseline diagnostic group'
+---
+
+## Overview
+
+The conversion analyzer provides granular performance analysis by breaking down predictions according to baseline diagnostic group (CN, MCI, AD) and conversion status. This analysis reveals which patient subgroups the model handles well and where improvements are needed.
+
+Implemented in conversion_analyzer.py, this module tracks accuracy separately for:
+- CN-Stable: Cognitively Normal subjects who remain stable
+- CN→MCI: CN subjects who convert to Mild Cognitive Impairment
+- MCI-Stable: MCI subjects who remain stable
+- MCI→AD: MCI subjects who convert to Alzheimer's Disease
+- AD-Stable: AD subjects (typically remain stable)
+
+## Conversion Type Classification
+
+Each subject is assigned a conversion type based on baseline group and conversion label:
+
+```python
+def get_subject_conversion_type(subject_id, label_df):
+    subject_visits = label_df[label_df['Subject'] == subject_id].sort_values('Visit_idx')
+    
+    baseline_group = subject_visits.iloc[0]['Group']
+    is_converter = subject_visits.iloc[0]['Label_CS_Num'] == 1
+    
+    if baseline_group == 'CN':
+        if is_converter:
+            return 'CN->MCI'
+        else:
+            return 'CN-Stable'
+    elif baseline_group == 'MCI':
+        if is_converter:
+            return 'MCI->AD'
+        else:
+            return 'MCI-Stable'
+    elif baseline_group == 'AD':
+        return 'AD-Stable'
+```
+
+The function reads subject data from `TADPOLE_Simplified.csv` to determine baseline diagnostic group and conversion status.
+
+## Analysis Process
+
+The analysis matches predictions to conversion types for all test subjects:
+
+```python
+def analyze_conversion_predictions(test_subjects, predictions, targets, label_csv_path):
+    label_df = pd.read_csv(label_csv_path)
+    label_df['Subject'] = label_df['Subject'].str.replace('_', '', regex=False)
+    
+    results = defaultdict(lambda: {'correct': 0, 'total': 0, 'predictions': [], 'targets': []})
+    
+    for i, subject_id in enumerate(test_subjects):
+        conversion_type = get_subject_conversion_type(subject_id, label_df)
+        
+        pred = predictions[i]
+        target = targets[i]
+        
+        results[conversion_type]['total'] += 1
+        results[conversion_type]['predictions'].append(pred)
+        results[conversion_type]['targets'].append(target)
+        
+        if pred == target:
+            results[conversion_type]['correct'] += 1
+```
+
+## Stable vs Converter Predictions
+
+For each conversion type, accuracy is broken down by prediction outcome:
+
+```python
+# Break down by stable vs converter predictions
+stable_correct = sum(1 for p, t in zip(predictions, targets) if p == 0 and t == 0)
+stable_total = sum(1 for t in targets if t == 0)
+
+converter_correct = sum(1 for p, t in zip(predictions, targets) if p == 1 and t == 1)
+converter_total = sum(1 for t in targets if t == 1)
+```
+
+This reveals:
+- How well the model identifies stable subjects within each group
+- How well the model identifies converters within each group
+- Whether the model has different strengths for different conversion patterns
+
+## Result Structure
+
+For each conversion type, the analysis returns:
+
+```python
+final_results[conv_type] = {
+    'overall_accuracy': accuracy,
+    'total_subjects': data['total'],
+    'correct_predictions': data['correct'],
+    'stable_correct': stable_correct,
+    'stable_total': stable_total,
+    'stable_accuracy': stable_correct / stable_total if stable_total > 0 else 0,
+    'converter_correct': converter_correct,
+    'converter_total': converter_total,
+    'converter_accuracy': converter_correct / converter_total if converter_total > 0 else 0,
+    'predictions': data['predictions'],
+    'targets': data['targets']
+}
+```
+
+## Reporting Format
+
+Results are printed in a structured format showing per-group performance:
+
+```python
+for conv_type in ['CN-Stable', 'CN->MCI', 'MCI-Stable', 'MCI->AD', 'AD-Stable']:
+    if conv_type in conversion_results:
+        result = conversion_results[conv_type]
+        print(f"\n{conv_type}:")
+        print(f"  Overall: {result['correct_predictions']}/{result['total_subjects']} correct ({result['overall_accuracy']:.3f})")
+        
+        if result['stable_total'] > 0:
+            print(f"  Stable predictions: {result['stable_correct']}/{result['stable_total']} correct ({result['stable_accuracy']:.3f})")
+        
+        if result['converter_total'] > 0:
+            print(f"  Converter predictions: {result['converter_correct']}/{result['converter_total']} correct ({result['converter_accuracy']:.3f})")
+```
+
+Example output:
+```
+CN-Stable:
+  Overall: 45/52 correct (0.865)
+  Stable predictions: 45/50 correct (0.900)
+  Converter predictions: 0/2 correct (0.000)
+
+CN->MCI:
+  Overall: 3/5 correct (0.600)
+  Stable predictions: 1/2 correct (0.500)
+  Converter predictions: 2/3 correct (0.667)
+
+MCI-Stable:
+  Overall: 67/89 correct (0.753)
+  Stable predictions: 67/85 correct (0.788)
+  Converter predictions: 0/4 correct (0.000)
+
+MCI->AD:
+  Overall: 18/24 correct (0.750)
+  Stable predictions: 4/6 correct (0.667)
+  Converter predictions: 14/18 correct (0.778)
+```
+
+## Cross-Fold Aggregation
+
+Results are aggregated across all cross-validation folds:
+
+```python
+def aggregate_conversion_results(fold_conversion_results):
+    aggregated = defaultdict(lambda: {
+        'total_subjects': 0,
+        'correct_predictions': 0,
+        'stable_correct': 0,
+        'stable_total': 0,
+        'converter_correct': 0,
+        'converter_total': 0
+    })
+    
+    for fold_results in fold_conversion_results:
+        for conv_type, result in fold_results.items():
+            agg = aggregated[conv_type]
+            agg['total_subjects'] += result['total_subjects']
+            agg['correct_predictions'] += result['correct_predictions']
+            agg['stable_correct'] += result['stable_correct']
+            agg['stable_total'] += result['stable_total']
+            agg['converter_correct'] += result['converter_correct']
+            agg['converter_total'] += result['converter_total']
+```
+
+Final accuracies are calculated from aggregated counts:
+
+```python
+final_aggregated[conv_type] = {
+    'overall_accuracy': agg['correct_predictions'] / agg['total_subjects'],
+    'stable_accuracy': agg['stable_correct'] / agg['stable_total'],
+    'converter_accuracy': agg['converter_correct'] / agg['converter_total']
+}
+```
+
+## Usage in Training Pipeline
+
+The conversion analysis runs automatically after each fold's test evaluation:
+
+```python
+label_csv_path = os.path.join(data_path, "TADPOLE_Simplified.csv")
+conversion_results = analyze_conversion_predictions(
+    test_subjects, 
+    test_results['predictions'], 
+    test_results['targets'], 
+    label_csv_path
+)
+print_conversion_accuracy_report(conversion_results)
+fold_conversion_results.append(conversion_results)
+```
+
+After all folds complete:
+
+```python
+if fold_conversion_results:
+    aggregated_conversion_results = aggregate_conversion_results(fold_conversion_results)
+    print_conversion_accuracy_report(aggregated_conversion_results)
+```
+
+## Interpretation
+
+This analysis helps identify:
+
+1. **Group-specific challenges**: Which baseline groups are harder to predict
+2. **Class imbalance effects**: Whether the model struggles more with stable or converter predictions within each group
+3. **Clinical relevance**: Different conversion patterns (CN→MCI vs MCI→AD) may have different clinical implications
+4. **Model bias**: Whether the model is systematically biased toward predicting one class for certain groups
+
+For example, if MCI-Stable shows high stable accuracy but zero converter accuracy, this indicates the model defaults to predicting "stable" for MCI subjects, missing the minority who will convert.

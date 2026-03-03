@@ -1,0 +1,436 @@
+---
+title: Utils
+description: Utility functions for data splitting, graph summarization, and experiment setup
+---
+
+## Overview
+
+The `utils` module provides essential utility functions for dataset splitting, graph data summarization, and experimental setup. These functions support reproducible machine learning experiments and data analysis.
+
+## Functions
+
+### stratified_subject_split
+
+```python
+def stratified_subject_split(
+    subject_label_dict: Dict[str, int],
+    seed: int = 123
+) -> Tuple[List[str], List[str], List[str]]
+```
+
+Performs stratified train/val/test split at the subject level to maintain class distribution.
+
+<ParamField path="subject_label_dict" type="Dict[str, int]">
+  Dictionary mapping subject IDs to class labels.
+</ParamField>
+
+<ParamField path="seed" type="int" default="123">
+  Random seed for reproducibility.
+</ParamField>
+
+<ResponseField name="train_subjects" type="List[str]">
+  Subject IDs for training set (70% of data).
+</ResponseField>
+
+<ResponseField name="val_subjects" type="List[str]">
+  Subject IDs for validation set (10% of data).
+</ResponseField>
+
+<ResponseField name="test_subjects" type="List[str]">
+  Subject IDs for test set (20% of data).
+</ResponseField>
+
+### train_val_test_split
+
+```python
+def train_val_test_split(
+    kfold: int = 5,
+    fold: int = 0,
+    dataset_size: int = 1089,
+    seed: int = 123
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]
+```
+
+Generates train/validation/test splits for k-fold cross-validation.
+
+<ParamField path="kfold" type="int" default="5">
+  Number of cross-validation folds.
+</ParamField>
+
+<ParamField path="fold" type="int" default="0">
+  Which fold to return (0-indexed).
+</ParamField>
+
+<ParamField path="dataset_size" type="int" default="1089">
+  Total number of samples in dataset.
+</ParamField>
+
+<ParamField path="seed" type="int" default="123">
+  Random seed for reproducibility.
+</ParamField>
+
+<ResponseField name="train_id" type="np.ndarray">
+  Indices for training set.
+</ResponseField>
+
+<ResponseField name="val_id" type="np.ndarray">
+  Indices for validation set.
+</ResponseField>
+
+<ResponseField name="test_id" type="np.ndarray">
+  Indices for test set.
+</ResponseField>
+
+### summarize_patient_graph_dims
+
+```python
+def summarize_patient_graph_dims(
+    padded_graphs: Dict[str, List[Data]]
+) -> pd.DataFrame
+```
+
+Generates a summary DataFrame of graph dimensions across all subjects.
+
+<ParamField path="padded_graphs" type="Dict[str, List[Data]]">
+  Dictionary mapping subject IDs to lists of graph Data objects.
+</ParamField>
+
+<ResponseField name="summary" type="pd.DataFrame">
+  DataFrame with columns:
+  - `subject_id`: Subject identifier
+  - `num_graphs`: Number of graphs in the sequence
+  - `avg_nodes`: Average number of nodes per graph
+  - `avg_features`: Average feature dimension
+  - `avg_edges`: Average number of edges per graph
+  - `label`: Subject's class label
+</ResponseField>
+
+## Usage Examples
+
+### Stratified Subject-Level Split
+
+```python
+from utils import stratified_subject_split
+
+# Create subject-label mapping
+subject_labels = {
+    'sub-001': 0,  # stable
+    'sub-002': 1,  # converter
+    'sub-003': 0,
+    # ... more subjects
+}
+
+# Perform stratified split
+train_subjects, val_subjects, test_subjects = stratified_subject_split(
+    subject_labels,
+    seed=42
+)
+
+print(f"Train: {len(train_subjects)} subjects (70%)")
+print(f"Val: {len(val_subjects)} subjects (10%)")
+print(f"Test: {len(test_subjects)} subjects (20%)")
+
+# Verify class distribution
+train_labels = [subject_labels[s] for s in train_subjects]
+print(f"Train class distribution: {np.bincount(train_labels)}")
+```
+
+### K-Fold Cross-Validation
+
+```python
+from utils import train_val_test_split
+import numpy as np
+
+kfold = 5
+dataset_size = 1000
+
+for fold in range(kfold):
+    train_id, val_id, test_id = train_val_test_split(
+        kfold=kfold,
+        fold=fold,
+        dataset_size=dataset_size,
+        seed=123
+    )
+    
+    print(f"\nFold {fold + 1}/{kfold}:")
+    print(f"  Train: {len(train_id)} samples")
+    print(f"  Val: {len(val_id)} samples")
+    print(f"  Test: {len(test_id)} samples")
+    
+    # Verify no overlap
+    assert len(set(train_id) & set(val_id) & set(test_id)) == 0
+    
+    # Use indices to create data loaders
+    train_dataset = dataset[train_id]
+    val_dataset = dataset[val_id]
+    test_dataset = dataset[test_id]
+```
+
+### Graph Dimension Summary
+
+```python
+from utils import summarize_patient_graph_dims
+import pandas as pd
+
+# Assuming you have a dictionary of graphs per subject
+padded_graphs = {
+    'sub-001': [graph1, graph2, graph3],
+    'sub-002': [graph1, graph2],
+    # ...
+}
+
+# Generate summary
+df_summary = summarize_patient_graph_dims(padded_graphs)
+
+print("\nGraph Dimensions Summary:")
+print(df_summary.head())
+print("\nStatistics:")
+print(df_summary.describe())
+
+# Save summary
+df_summary.to_csv('data/graph_summary.csv', index=False)
+
+# Analyze by label
+for label in df_summary['label'].unique():
+    label_data = df_summary[df_summary['label'] == label]
+    print(f"\nLabel {label}:")
+    print(f"  Subjects: {len(label_data)}")
+    print(f"  Avg nodes: {label_data['avg_nodes'].mean():.1f}")
+    print(f"  Avg edges: {label_data['avg_edges'].mean():.1f}")
+```
+
+### Complete Dataset Preparation
+
+```python
+from utils import stratified_subject_split, summarize_patient_graph_dims
+from GraphConverter import load_fc_graph_sequences_walk, createPadded
+import numpy as np
+import random
+import torch
+
+def set_random_seeds(seed=42):
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# Set seeds
+set_random_seeds(42)
+
+# Load graphs
+fc_graphs = load_fc_graph_sequences_walk(
+    base_path="data/FC_Matrices",
+    threshold=0.2
+)
+
+# Pad sequences
+padded_graphs = createPadded(fc_graphs)
+
+# Summarize dimensions
+df_summary = summarize_patient_graph_dims(padded_graphs)
+print(df_summary)
+df_summary.to_csv('data/graph_summary.csv', index=False)
+
+# Create subject-label mapping
+subject_labels = {}
+for subj_id, graphs in padded_graphs.items():
+    if hasattr(graphs[0], 'y'):
+        subject_labels[subj_id] = graphs[0].y.item()
+
+# Stratified split
+train_subj, val_subj, test_subj = stratified_subject_split(
+    subject_labels,
+    seed=42
+)
+
+print(f"\nDataset split:")
+print(f"  Training: {len(train_subj)} subjects")
+print(f"  Validation: {len(val_subj)} subjects")
+print(f"  Test: {len(test_subj)} subjects")
+```
+
+### Integration with PyTorch Geometric
+
+```python
+from utils import train_val_test_split
+from torch_geometric.loader import DataLoader
+
+# Get split indices for current fold
+train_idx, val_idx, test_idx = train_val_test_split(
+    kfold=5,
+    fold=0,
+    dataset_size=len(dataset),
+    seed=42
+)
+
+# Create data loaders
+train_loader = DataLoader(
+    dataset[train_idx],
+    batch_size=32,
+    shuffle=True
+)
+
+val_loader = DataLoader(
+    dataset[val_idx],
+    batch_size=32,
+    shuffle=False
+)
+
+test_loader = DataLoader(
+    dataset[test_idx],
+    batch_size=32,
+    shuffle=False
+)
+
+# Use in training loop
+for epoch in range(num_epochs):
+    for batch in train_loader:
+        # training code
+        pass
+```
+
+### Verify Split Stratification
+
+```python
+from utils import stratified_subject_split
+import numpy as np
+
+# Create subject-label mapping
+subject_labels = {f'sub-{i:03d}': i % 2 for i in range(100)}
+
+# Multiple splits with different seeds
+for seed in [42, 123, 456]:
+    train, val, test = stratified_subject_split(subject_labels, seed=seed)
+    
+    # Calculate class distributions
+    train_dist = np.mean([subject_labels[s] for s in train])
+    val_dist = np.mean([subject_labels[s] for s in val])
+    test_dist = np.mean([subject_labels[s] for s in test])
+    
+    print(f"\nSeed {seed}:")
+    print(f"  Train converter ratio: {train_dist:.3f}")
+    print(f"  Val converter ratio: {val_dist:.3f}")
+    print(f"  Test converter ratio: {test_dist:.3f}")
+    print(f"  Difference: {max(train_dist, val_dist, test_dist) - min(train_dist, val_dist, test_dist):.3f}")
+```
+
+### Custom Split Ratios
+
+```python
+from sklearn.model_test_split import train_test_split
+import numpy as np
+import random
+
+def custom_split(subject_label_dict, train_size=0.7, val_size=0.15, seed=123):
+    """
+    Custom train/val/test split with configurable ratios.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    df = pd.DataFrame(
+        list(subject_label_dict.items()),
+        columns=['subject_id', 'label']
+    )
+    
+    # First split: train vs temp
+    train_df, temp_df = train_test_split(
+        df,
+        test_size=(1 - train_size),
+        stratify=df['label'],
+        random_state=seed
+    )
+    
+    # Second split: val vs test
+    val_ratio = val_size / (1 - train_size)
+    val_df, test_df = train_test_split(
+        temp_df,
+        test_size=(1 - val_ratio),
+        stratify=temp_df['label'],
+        random_state=seed
+    )
+    
+    return (
+        list(train_df['subject_id']),
+        list(val_df['subject_id']),
+        list(test_df['subject_id'])
+    )
+
+# Use custom split
+train, val, test = custom_split(
+    subject_labels,
+    train_size=0.8,
+    val_size=0.1,
+    seed=42
+)
+```
+
+## Best Practices
+
+<Tip>
+Always use the same seed across experiments for reproducibility. Document the seed in your configuration.
+</Tip>
+
+<Warning>
+For temporal data, ensure you're splitting at the subject level, not the visit level, to prevent data leakage.
+</Warning>
+
+<Note>
+Stratified splitting maintains class balance but may need adjustment for very small datasets or extreme class imbalance.
+</Note>
+
+## Reproducibility Guidelines
+
+### Setting All Random Seeds
+
+```python
+import random
+import numpy as np
+import torch
+
+def set_random_seeds(seed=42):
+    """Comprehensive random seed setting."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# Call at the start of your script
+set_random_seeds(42)
+```
+
+### Documenting Splits
+
+```python
+import json
+from utils import stratified_subject_split
+
+# Perform split
+train, val, test = stratified_subject_split(subject_labels, seed=42)
+
+# Save split information
+split_info = {
+    'seed': 42,
+    'train_subjects': train,
+    'val_subjects': val,
+    'test_subjects': test,
+    'train_size': len(train),
+    'val_size': len(val),
+    'test_size': len(test)
+}
+
+with open('data/split_info.json', 'w') as f:
+    json.dump(split_info, f, indent=2)
+```
+
+## Related
+
+- [FC_ADNIDataset](/api/fc-adni-dataset) - Dataset class using these utilities
+- [Data Preparation](/data/data-preparation) - Complete data preparation pipeline
+- [Cross-Validation](/training/cross-validation) - Advanced CV strategies
